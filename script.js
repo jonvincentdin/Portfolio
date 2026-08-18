@@ -282,7 +282,22 @@
       const res = await fetch("/api/auth", {credentials:"same-origin", cache:"no-store"});
       authState = res.ok ? await res.json() : {hasPassword:false, authenticated:false};
     }catch(e){ authState = {hasPassword:false, authenticated:false}; }
-    state.editing = !!authState.authenticated;
+
+    // Security: never resume an editing session across a page load/refresh —
+    // always require the password plus the emailed code again. If a session
+    // cookie was still valid from before, clear it server-side too so a
+    // stolen/leftover cookie can't quietly keep edit access alive.
+    if(authState.authenticated){
+      try{
+        await fetch("/api/auth", {
+          method:"POST", credentials:"same-origin",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({action:"logout"})
+        });
+      }catch(e){ /* best-effort */ }
+    }
+    authState.authenticated = false;
+    state.editing = false;
 
     try{
       const raw = localStorage.getItem(PREFS_KEY);
@@ -706,17 +721,13 @@
       html += `</div>`;
     }
 
-    if(data.profile.socials && data.profile.socials.length){
-      html += `<div class="socials-row" style="margin-top:14px;">` + data.profile.socials.map(s=>`<a class="social-link" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>`).join("") + `</div>`;
-    }
-
     const hasContactLinks = c.links && c.links.length;
     if(hasContactLinks || editing){
       html += `<div class="subhead"><h3>Additional Links</h3>${editing?`<button class="textlink" data-action="edit-contact-links">Edit links</button>`:''}</div>`;
       if(hasContactLinks){
         html += `<div class="socials-row">` + c.links.map(l=>`<a class="social-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join("") + `</div>`;
       } else if(editing){
-        html += `<div class="hint" style="margin:0;">No extra links yet — add a scheduling page, WhatsApp, Discord, or anything else you'd like here.</div>`;
+        html += `<div class="hint" style="margin:0;">No extra links yet — add GitHub, LinkedIn, a scheduling page, WhatsApp, Discord, or anything else you'd like here.</div>`;
       }
     }
 
@@ -780,6 +791,8 @@
   }
 
   /* ============ Auth modals ============ */
+  const OWNER_EMAIL_DISPLAY = "jonvincent.din@gmail.com";
+
   async function callAuthApi(payload){
     const res = await fetch("/api/auth", {
       method:"POST", credentials:"same-origin",
@@ -790,58 +803,167 @@
     return {ok: res.ok, ...json};
   }
 
+  // Shared step 2 for every auth flow below: enter the 6-digit code that was
+  // just emailed. Built as its own modal (rather than reusing openFormModal)
+  // because it needs to stay open through an async verify/resend round trip
+  // instead of closing immediately on submit.
+  function openCodeStepModal(opts){
+    let token = opts.token;
+    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <h3>Enter verification code</h3>
+        <div class="modal-sub">${esc(opts.description)}</div>
+        <div class="field"><label>6-digit code</label><input id="otp_code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"></div>
+        <div class="hint" style="margin:0 0 10px;">Code expires in 10 minutes. <button type="button" class="textlink" data-action="otp-resend">Resend code</button></div>
+        <div class="modal-actions">
+          <button class="btn ghost" data-action="modal-cancel">Cancel</button>
+          <span class="spacer"></span>
+          <button class="btn accent" data-action="otp-verify">Verify</button>
+        </div>
+      </div>
+    </div>`;
+    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+
+    const verifyBtn = modalRoot.querySelector('[data-action="otp-verify"]');
+    const codeInput = document.getElementById("otp_code");
+    codeInput.focus();
+
+    const doVerify = async ()=>{
+      const code = codeInput.value.trim();
+      if(!code){ showToast("Enter the code from your email.", true); return; }
+      verifyBtn.disabled = true; verifyBtn.textContent = "Verifying…";
+      const result = await callAuthApi({action:"verify-code", token, code});
+      verifyBtn.disabled = false; verifyBtn.textContent = "Verify";
+      if(!result.ok){ showToast(result.error || "That code is wrong or has expired.", true); return; }
+      closeModal();
+      opts.onVerified();
+    };
+    verifyBtn.onclick = doVerify;
+    codeInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doVerify(); } });
+
+    modalRoot.querySelector('[data-action="otp-resend"]').onclick = async (e)=>{
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const result = await callAuthApi({action:"resend-code", token});
+      btn.disabled = false;
+      if(!result.ok){ showToast(result.error || "Couldn't resend the code.", true); return; }
+      token = result.token;
+      showToast(`New code sent to ${OWNER_EMAIL_DISPLAY}`);
+    };
+  }
+
   function openAuthModal(){
     if(!authState.hasPassword){
-      openFormModal({
-        title:"Set an edit password",
-        sub:"This unlocks edit mode for everyone who knows it — it's checked on the server and hashed before storage, never kept as plain text anywhere.",
-        fields:[
-          {name:"pw", label:"New password", type:"password", required:true},
-          {name:"pw2", label:"Confirm password", type:"password", required:true}
-        ],
-        submitLabel:"Set password & unlock",
-        onSubmit:async(v)=>{
-          if(v.pw !== v.pw2){ showToast("Passwords don't match.", true); return; }
-          if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
-          const result = await callAuthApi({action:"setup", password:v.pw});
-          if(!result.ok){ showToast(result.error || "Couldn't set the password.", true); return; }
-          authState = {hasPassword:true, authenticated:true};
-          state.editing = true; render();
-          showToast("Edit mode unlocked");
-        }
-      });
+      modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
+        <div class="modal-box" role="dialog" aria-modal="true">
+          <h3>Set an edit password</h3>
+          <div class="modal-sub">This unlocks edit mode for everyone who knows it — it's hashed before storage, never kept as plain text. We'll also email a 6-digit code to ${esc(OWNER_EMAIL_DISPLAY)} to confirm it's you.</div>
+          <div class="field"><label>New password</label><input id="su_pw" type="password"></div>
+          <div class="field"><label>Confirm password</label><input id="su_pw2" type="password"></div>
+          <div class="modal-actions">
+            <button class="btn ghost" data-action="modal-cancel">Cancel</button>
+            <span class="spacer"></span>
+            <button class="btn accent" data-action="su-submit">Continue</button>
+          </div>
+        </div>
+      </div>`;
+      modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+      modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+      const submitBtn = modalRoot.querySelector('[data-action="su-submit"]');
+      submitBtn.onclick = async ()=>{
+        const pw = document.getElementById("su_pw").value;
+        const pw2 = document.getElementById("su_pw2").value;
+        if(pw !== pw2){ showToast("Passwords don't match.", true); return; }
+        if(pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
+        submitBtn.disabled = true; submitBtn.textContent = "Sending code…";
+        const result = await callAuthApi({action:"setup", password:pw});
+        submitBtn.disabled = false; submitBtn.textContent = "Continue";
+        if(!result.ok){ showToast(result.error || "Couldn't set the password.", true); return; }
+        openCodeStepModal({
+          token: result.token,
+          description: `We emailed a 6-digit code to ${OWNER_EMAIL_DISPLAY} to confirm it's you.`,
+          onVerified: ()=>{
+            authState = {hasPassword:true, authenticated:true};
+            state.editing = true; render();
+            showToast("Edit mode unlocked");
+          }
+        });
+      };
     } else {
-      openFormModal({
-        title:"Enter edit password",
-        fields:[{name:"pw", label:"Password", type:"password", required:true}],
-        submitLabel:"Unlock",
-        onSubmit:async(v)=>{
-          const result = await callAuthApi({action:"login", password:v.pw});
-          if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
-          authState = {hasPassword:true, authenticated:true};
-          state.editing = true; render();
-          showToast("Edit mode unlocked");
-        }
-      });
+      modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
+        <div class="modal-box" role="dialog" aria-modal="true">
+          <h3>Enter edit password</h3>
+          <div class="modal-sub">We'll also email a 6-digit code to ${esc(OWNER_EMAIL_DISPLAY)} to confirm it's you.</div>
+          <div class="field"><label>Password</label><input id="li_pw" type="password"></div>
+          <div class="modal-actions">
+            <button class="btn ghost" data-action="modal-cancel">Cancel</button>
+            <span class="spacer"></span>
+            <button class="btn accent" data-action="li-submit">Continue</button>
+          </div>
+        </div>
+      </div>`;
+      modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+      modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+      const submitBtn = modalRoot.querySelector('[data-action="li-submit"]');
+      const pwInput = document.getElementById("li_pw");
+      pwInput.focus();
+      const doSubmit = async ()=>{
+        const pw = pwInput.value;
+        if(!pw){ showToast("Enter your password.", true); return; }
+        submitBtn.disabled = true; submitBtn.textContent = "Sending code…";
+        const result = await callAuthApi({action:"login", password:pw});
+        submitBtn.disabled = false; submitBtn.textContent = "Continue";
+        if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
+        openCodeStepModal({
+          token: result.token,
+          description: `We emailed a 6-digit code to ${OWNER_EMAIL_DISPLAY} to confirm it's you.`,
+          onVerified: ()=>{
+            authState = {hasPassword:true, authenticated:true};
+            state.editing = true; render();
+            showToast("Edit mode unlocked");
+          }
+        });
+      };
+      submitBtn.onclick = doSubmit;
+      pwInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doSubmit(); } });
     }
   }
+
   function openChangePasswordModal(){
-    openFormModal({
-      title:"Change edit password",
-      fields:[
-        {name:"current", label:"Current password", type:"password", required:true},
-        {name:"next", label:"New password", type:"password", required:true},
-        {name:"next2", label:"Confirm new password", type:"password", required:true}
-      ],
-      submitLabel:"Update password",
-      onSubmit:async(v)=>{
-        if(v.next !== v.next2){ showToast("New passwords don't match.", true); return; }
-        if(v.next.length < 4){ showToast("Use at least 4 characters.", true); return; }
-        const result = await callAuthApi({action:"change", currentPassword:v.current, newPassword:v.next});
-        if(!result.ok){ showToast(result.error || "Couldn't update the password.", true); return; }
-        showToast("Password updated");
-      }
-    });
+    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <h3>Change edit password</h3>
+        <div class="modal-sub">We'll email a 6-digit code to ${esc(OWNER_EMAIL_DISPLAY)} to confirm it's you before the change takes effect.</div>
+        <div class="field"><label>Current password</label><input id="cp_current" type="password"></div>
+        <div class="field"><label>New password</label><input id="cp_next" type="password"></div>
+        <div class="field"><label>Confirm new password</label><input id="cp_next2" type="password"></div>
+        <div class="modal-actions">
+          <button class="btn ghost" data-action="modal-cancel">Cancel</button>
+          <span class="spacer"></span>
+          <button class="btn accent" data-action="cp-submit">Continue</button>
+        </div>
+      </div>
+    </div>`;
+    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+    const submitBtn = modalRoot.querySelector('[data-action="cp-submit"]');
+    submitBtn.onclick = async ()=>{
+      const current = document.getElementById("cp_current").value;
+      const next = document.getElementById("cp_next").value;
+      const next2 = document.getElementById("cp_next2").value;
+      if(next !== next2){ showToast("New passwords don't match.", true); return; }
+      if(next.length < 4){ showToast("Use at least 4 characters.", true); return; }
+      submitBtn.disabled = true; submitBtn.textContent = "Sending code…";
+      const result = await callAuthApi({action:"change", currentPassword:current, newPassword:next});
+      submitBtn.disabled = false; submitBtn.textContent = "Continue";
+      if(!result.ok){ showToast(result.error || "Couldn't update the password.", true); return; }
+      openCodeStepModal({
+        token: result.token,
+        description: `We emailed a 6-digit code to ${OWNER_EMAIL_DISPLAY} to confirm it's you.`,
+        onVerified: ()=>{ showToast("Password updated"); }
+      });
+    };
   }
   async function logout(){
     await callAuthApi({action:"logout"});
@@ -1291,7 +1413,7 @@
         const key = btn.dataset.key;
         const idx = data.hiddenSections.indexOf(key);
         if(idx>-1){ data.hiddenSections.splice(idx,1); } else { data.hiddenSections.push(key); }
-        saveDraft();
+        render(); saveData();
         renderManageSectionsModal();
       };
     });
@@ -1305,7 +1427,7 @@
         if(idx<=0) return;
         const arr = data.sectionOrder;
         [arr[idx-1], arr[idx]] = [arr[idx], arr[idx-1]];
-        saveDraft();
+        render(); saveData();
         renderManageSectionsModal();
       };
     });
@@ -1316,7 +1438,7 @@
         if(idx>=data.sectionOrder.length-1) return;
         const arr = data.sectionOrder;
         [arr[idx+1], arr[idx]] = [arr[idx], arr[idx+1]];
-        saveDraft();
+        render(); saveData();
         renderManageSectionsModal();
       };
     });
@@ -1538,10 +1660,10 @@
       if(!file && !url){ showToast("Upload a photo or paste an image URL.", true); return; }
       if(file){
         try{
-          const dataUrl = await resizeImageFile(file);
-          p.images.push({id:uid(), url:dataUrl, caption});
+          const url = await uploadImageFile(file, 1600, 0.85);
+          p.images.push({id:uid(), url, caption});
           renderProjectModal(isEdit);
-        }catch(err){ showToast("Couldn't read that image — try a different file.", true); }
+        }catch(err){ showToast(err.message || "Couldn't upload that image — try a different file.", true); }
       } else {
         p.images.push({id:uid(), url, caption});
         renderProjectModal(isEdit);
