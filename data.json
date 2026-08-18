@@ -1,0 +1,51 @@
+{
+  "profile": {
+    "name": "Your Name",
+    "title": "What you do, in a few words",
+    "description": "Write a short, warm introduction here — who you are, what you care about, and what you're working on. Unlock edit mode to change this.",
+    "photo": "",
+    "socials": [
+      { "id": "s1", "type": "github", "label": "GitHub", "url": "https://github.com/" },
+      { "id": "s2", "type": "linkedin", "label": "LinkedIn", "url": "https://linkedin.com/" }
+    ]
+  },
+  "achievements": [
+    { "id": "a1", "title": "Sample Achievement", "org": "Where it happened", "date": "2024", "description": "Delete this and add your own achievements once you're in edit mode." }
+  ],
+  "education": [
+    { "id": "e1", "title": "Degree / Program", "org": "School name", "date": "2020 – 2024", "description": "A short note about focus areas, honors, or coursework." }
+  ],
+  "skills": [
+    { "id": "sk1", "category": "Languages", "items": ["JavaScript", "Python", "SQL"] },
+    { "id": "sk2", "category": "Tools", "items": ["Git", "Figma"] }
+  ],
+  "experience": [
+    { "id": "x1", "sectionTitle": "Work Experience", "items": [
+      { "id": "xi1", "title": "Job Title", "subtitle": "Company", "date": "2023 – Present", "description": "What you did and what changed because of it." }
+    ]},
+    { "id": "x2", "sectionTitle": "Organizational Experience", "items": [
+      { "id": "xi2", "title": "Role", "subtitle": "Organization", "date": "2022", "description": "A line about the role and impact." }
+    ]}
+  ],
+  "projectCategories": [
+    { "id": "pc1", "title": "Projects", "projects": [
+      { "id": "p1", "header": "Sample Project", "description": "A short description of what this project does and why you built it.", "tags": ["React", "Node"],
+        "links": [{ "id": "l1", "type": "github", "label": "View source", "url": "https://github.com/" }],
+        "files": [], "images": [] }
+    ]}
+  ],
+  "contact": {
+    "email": "jonvincent.din@gmail.com",
+    "phone": "",
+    "location": "",
+    "availability": "",
+    "preferred": "",
+    "resumeUrl": "",
+    "blurb": "I welcome new opportunities and inquiries — please reach out, and I aim to respond within a couple of business days.",
+    "links": []
+  },
+  "customSections": [],
+  "hiddenSections": [],
+  "sectionOrder": ["home", "achievements", "projects", "skills", "experience", "contact"],
+  "projectPhotoSize": "M"
+}

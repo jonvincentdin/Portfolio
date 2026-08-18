@@ -1,0 +1,9 @@
+{
+  "name": "portfolio-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static portfolio with Vercel serverless API routes and Vercel Blob storage for content, photos, and files.",
+  "dependencies": {
+    "@vercel/blob": "^0.27.0"
+  }
+}
