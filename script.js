@@ -530,8 +530,8 @@
       const sizes = ["S","M","L"];
       const current = data.projectPhotoSize || "M";
       html += `<div class="prefs" style="margin-bottom:22px;">
-        <span class="prefs-label">Photo size</span>
-        <div class="prefs-group" role="group" aria-label="Project photo size">
+        <span class="prefs-label">Attachment tile size</span>
+        <div class="prefs-group" role="group" aria-label="Project attachment tile size">
           ${sizes.map(s=>`<button data-action="set-project-photo-size" data-value="${s}" class="${current===s?'active':''}">${s}</button>`).join("")}
         </div>
       </div>`;
@@ -572,36 +572,64 @@
       </div>
       ${pr.description?`<p class="entry-desc" style="margin-top:6px;">${nl2br(pr.description)}</p>`:''}
       ${(pr.tags&&pr.tags.length)?`<div style="margin-top:8px;">${pr.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`:''}
-      ${renderProjectLinksAndFiles(pr)}
-      ${renderProjectImages(pr)}
+      ${renderProjectAttachments(pr)}
     </div>`;
   }
-  function renderProjectLinksAndFiles(pr){
-    const all = [...(pr.links||[]), ...(pr.files||[]).map(f=>({...f, type:"download"}))];
-    if(all.length===0) return "";
-    const linksHtml = all.map(l=>{
-      const badge = l.type === "download" ? "Download ↓" : (l.type === "github" ? "GitHub ↗" : (l.type === "live" || l.type==="demo" ? "Live ↗" : "Link ↗"));
-      return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || badge)}</a>`;
-    }).join("");
+  function getFileExt(url){
+    try{
+      const clean = String(url||"").split(/[?#]/)[0];
+      const m = clean.match(/\.([a-zA-Z0-9]{1,5})$/);
+      return m ? m[1].toLowerCase() : "";
+    }catch(e){ return ""; }
+  }
+  function renderImageTile(img, headerFallback){
+    const caption = img.caption || "";
+    const title = caption || headerFallback || "Photo";
+    return `<a class="attach-tile attach-image" href="${esc(img.url)}" target="_blank" rel="noopener" title="${esc(title)}">
+      <img src="${esc(img.url)}" alt="${esc(title)}" loading="lazy">
+      ${caption?`<span class="attach-caption">${esc(caption)}</span>`:''}
+    </a>`;
+  }
+  function renderFileTile(f){
+    const ext = getFileExt(f.url);
+    const label = f.label || "File";
+    if(ext === "pdf"){
+      return `<a class="attach-tile attach-pdf" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(label)}">
+        <embed src="${esc(f.url)}" type="application/pdf">
+        <span class="attach-badge">PDF</span>
+        <span class="attach-caption">${esc(label)}</span>
+      </a>`;
+    }
+    const extLabel = ext ? ext.toUpperCase() : "FILE";
+    return `<a class="attach-tile attach-file" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(label)}">
+      <span class="attach-ext">${esc(extLabel)}</span>
+      <span class="attach-label">${esc(label)}</span>
+    </a>`;
+  }
+  function renderProjectAttachments(pr){
+    const links = pr.links || [];
+    const files = pr.files || [];
+    const images = pr.images || [];
+    const total = links.length + files.length + images.length;
+    if(total === 0) return "";
+    const hasTiles = files.length + images.length > 0;
+    const linksHtml = links.length ? `<div class="cert-links"${hasTiles?' style="margin-bottom:14px;"':''}>${links.map(l=>{
+      const badge = l.type === "github" ? "GitHub ↗" : (l.type === "live" || l.type==="demo" ? "Live ↗" : "Link ↗");
+      return `<a class="cert-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || badge)}</a>`;
+    }).join("")}</div>` : '';
+    const sizeClass = "size-" + (data.projectPhotoSize || "M").toLowerCase();
+    const tiles = [...images.map(im=>renderImageTile(im, pr.header)), ...files.map(f=>renderFileTile(f))].join("");
+    const tilesHtml = tiles ? `<div class="project-attachments ${sizeClass}">${tiles}</div>` : '';
     return `<button class="cert-trigger" data-action="toggle-cert" data-id="${pr.id}">
-      <span class="cert-trigger-label">Links & files (${all.length})</span>
+      <span class="cert-trigger-label">Files & links (${total})</span>
       <span class="cert-chevron">⌄</span>
     </button>
     <div class="cert-box" id="certbox-${pr.id}">
       <div class="cert-box-inner">
-        <div class="cert-links">${linksHtml}</div>
+        ${linksHtml}
+        ${tilesHtml}
       </div>
     </div>`;
-  }
-  function renderProjectImages(pr){
-    if(!pr.images || pr.images.length===0) return "";
-    const sizeClass = "size-" + (data.projectPhotoSize || "M").toLowerCase();
-    let html = `<div class="project-images ${sizeClass}">`;
-    pr.images.forEach(img=>{
-      html += `<figure><img src="${esc(img.url)}" alt="${esc(img.caption||pr.header)}" loading="lazy">${img.caption?`<figcaption>${esc(img.caption)}</figcaption>`:''}</figure>`;
-    });
-    html += `</div>`;
-    return html;
   }
 
   /* ============ SKILLS ============ */
