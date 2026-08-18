@@ -60,6 +60,33 @@ If any of these are missing, `/api/auth`, `/api/data`, or `/api/upload` will
 fail — that's almost certainly why a password "doesn't save" or a code never
 arrives: there's nothing there yet to save it to / send it with.
 
+## Troubleshooting: "my site went back to the placeholder content"
+
+This almost always means the deployment can't reach your Blob store — **not**
+that your real data was deleted. Vercel Blob stores live independently of
+any single project and can be connected to more than one project, so a
+common trap is: you already had a store connected and full of real data on
+one project, then you pushed to GitHub and it imported as (or redeployed to)
+a project that store isn't connected to yet.
+
+The app is built to fail loudly instead of silently overwriting anything —
+if it can't load your saved content, it shows a warning banner and disables
+editing rather than quietly showing/saving placeholder content over your
+real data. If you see that banner:
+
+1. In the Vercel dashboard, open your **Storage** tab (either from the
+   project, or from your team's Storage section) and find the Blob store
+   that already has your data in it.
+2. Open that store → **Projects** tab → connect it to *this* project (the
+   one you just deployed). Don't create a brand-new store — that would be
+   empty.
+3. Also double-check **Settings → Environment Variables** on this project
+   has `SESSION_SECRET` and `RESEND_API_KEY` set (these are per-project and
+   don't carry over automatically to a new project either).
+4. Redeploy from the **Deployments** tab so the functions pick up the
+   change, then reload the site and click **Retry** on the banner (or just
+   refresh).
+
 ## Testing it
 
 **Fastest: deploy it, then test on the real URL.**
@@ -121,6 +148,10 @@ reload without re-entering the password and code.
   `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`.
 - `/api/data` and `/api/upload` both require the session cookie for writes;
   reads are public (this is a public portfolio site).
+- If the site can't confirm your real content loaded (e.g. Blob storage
+  isn't connected to this deployment), it shows a warning banner and
+  disables editing entirely rather than silently letting you save over your
+  real data with placeholder content.
 
 
 

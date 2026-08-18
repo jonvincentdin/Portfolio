@@ -17,7 +17,7 @@
   let data = null;        // live portfolio content, backed by the server (Vercel Blob via /api/data)
   let authState = {hasPassword:false, authenticated:false};
   let prefs = {theme:"paper", size:"md"};
-  let state = { editing:false, section:"home" };
+  let state = { editing:false, section:"home", dataLoadFailed:false, dataLoadError:"" };
 
   const page = document.getElementById("page");
   const modalRoot = document.getElementById("modal-root");
@@ -265,10 +265,24 @@
   }
 
   async function loadAll(){
+    state.dataLoadFailed = false;
+    let loadError = "";
+
     try{
       const res = await fetch("/api/data", {credentials:"same-origin", cache:"no-store"});
-      data = res.ok ? await res.json() : defaultData();
-    }catch(e){ data = defaultData(); }
+      if(res.ok){
+        data = await res.json();
+      } else {
+        const err = await res.json().catch(()=>({}));
+        loadError = err.error || `The server returned an error (status ${res.status}).`;
+        data = defaultData();
+        state.dataLoadFailed = true;
+      }
+    }catch(e){
+      loadError = "Couldn't reach the server.";
+      data = defaultData();
+      state.dataLoadFailed = true;
+    }
     if(!data.customSections) data.customSections = [];
     if(!data.hiddenSections) data.hiddenSections = [];
     if(!data.sectionOrder) data.sectionOrder = [];
@@ -280,8 +294,20 @@
 
     try{
       const res = await fetch("/api/auth", {credentials:"same-origin", cache:"no-store"});
-      authState = res.ok ? await res.json() : {hasPassword:false, authenticated:false};
-    }catch(e){ authState = {hasPassword:false, authenticated:false}; }
+      if(res.ok){
+        authState = await res.json();
+      } else {
+        const err = await res.json().catch(()=>({}));
+        if(!loadError) loadError = err.error || `The server returned an error (status ${res.status}).`;
+        authState = {hasPassword:false, authenticated:false};
+        state.dataLoadFailed = true;
+      }
+    }catch(e){
+      if(!loadError) loadError = "Couldn't reach the server.";
+      authState = {hasPassword:false, authenticated:false};
+      state.dataLoadFailed = true;
+    }
+    state.dataLoadError = loadError;
 
     // Security: never resume an editing session across a page load/refresh —
     // always require the password plus the emailed code again. If a session
@@ -307,6 +333,10 @@
   }
 
   async function saveData(){
+    if(state.dataLoadFailed){
+      showToast("Can't save — your real content didn't load, so saving now would overwrite it. Fix the connection and hit Retry first.", true);
+      return false;
+    }
     try{
       const res = await fetch("/api/data", {
         method:"POST", credentials:"same-origin",
@@ -342,6 +372,14 @@
     if(!editing && data.hiddenSections.includes(state.section)){ state.section = "home"; }
 
     let html = "";
+    if(state.dataLoadFailed){
+      html += `<div class="load-error-banner" role="alert">
+        <div><strong>Couldn't load your saved content${state.dataLoadError?` (${esc(state.dataLoadError)})`:''}.</strong>
+        Showing placeholder content instead — editing is disabled so nothing here can accidentally overwrite your real data.
+        This usually means the database (Vercel Blob storage) isn't connected to this deployment, or an environment variable is missing/hasn't taken effect yet. Check your Vercel project's Storage tab and Environment Variables, redeploy if you just changed them, then retry.</div>
+        <button class="btn ghost sm" data-action="retry-load" style="flex-shrink:0;">Retry</button>
+      </div>`;
+    }
     html += renderSiteHeader(editing);
     html += renderTopbar(editing);
     if(editing) html += renderEditbar();
@@ -1733,7 +1771,12 @@
       case "set-size": prefs.size = btn.dataset.value; applyPrefs(); savePrefs(); render(); break;
       case "set-project-photo-size": data.projectPhotoSize = btn.dataset.value; persistAndRender(); break;
       case "toggle-edit":
+        if(state.dataLoadFailed){ showToast("Editing is disabled until your saved content loads correctly — hit Retry above.", true); break; }
         if(state.editing){ state.editing = false; render(); } else { openAuthModal(); }
+        break;
+      case "retry-load":
+        btn.disabled = true; btn.textContent = "Retrying…";
+        loadAll().then(()=>{ render(); });
         break;
       case "change-password": openChangePasswordModal(); break;
       case "manage-sections": openManageSectionsModal(); break;
