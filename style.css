@@ -74,12 +74,6 @@ button{font-family:inherit; cursor:pointer;}
   border-radius:var(--radius); padding:11px 14px; margin-bottom:18px; font-size:.82rem; color:var(--ink-soft);
 }
 .editbar button.linklike{background:none; border:none; color:var(--accent); text-decoration:underline; font-size:.78rem; padding:0;}
-.load-error-banner{
-  display:flex; flex-wrap:wrap; align-items:center; gap:14px; border:1px solid var(--danger);
-  background:color-mix(in srgb, var(--danger) 10%, var(--surface)); border-radius:var(--radius);
-  padding:14px 16px; margin-bottom:18px; font-size:.82rem; color:var(--ink); line-height:1.5;
-}
-.load-error-banner strong{display:block; margin-bottom:2px;}
 .draft-badge{
   display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
   border-radius:999px; padding:5px 12px; font-family:"JetBrains Mono", monospace; font-size:.68rem; letter-spacing:.02em;
@@ -180,13 +174,15 @@ main.stage{ animation:rise .2s ease; }
 }
 .cert-box-inner{
   margin-top:12px; padding:14px; border:1px solid var(--line-strong); border-radius:var(--radius);
-  background:var(--accent-soft);
+  background:var(--surface);
 }
 .cert-image{
-  max-width:100%; width:auto; height:auto; display:block; margin:0 auto; border-radius:6px;
-  border:1px solid var(--line-strong); background:var(--surface);
+  max-width:100%; width:100%; height:auto; display:block; margin:0 auto; border-radius:8px;
+  border:1px solid var(--line-strong); cursor:zoom-in; transition:transform .2s ease, box-shadow .2s ease;
 }
-.cert-box.open .cert-image{ margin-bottom:10px; }
+.cert-image:hover{ transform:scale(1.012); box-shadow:0 10px 26px rgba(0,0,0,.14); }
+.cert-box.open .cert-image{ margin-bottom:4px; }
+.photo-hint{ font-size:.62rem; color:var(--muted); font-family:"JetBrains Mono", monospace; margin:6px 0 10px; }
 .cert-links{ display:flex; flex-wrap:wrap; gap:8px 16px; }
 .cert-link{
   display:inline-block; font-family:"JetBrains Mono", monospace; font-size:.78rem; color:var(--ink);
@@ -217,39 +213,20 @@ main.stage{ animation:rise .2s ease; }
 .project-links{display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:12px;}
 .project-links a{font-family:"JetBrains Mono", monospace; font-size:.74rem; text-decoration:none; color:var(--ink); border-bottom:1px solid var(--line-strong);}
 .project-links a:hover{color:var(--accent); border-color:var(--accent);}
-.project-attachments{display:flex; gap:14px; margin-top:4px; flex-wrap:wrap; align-items:flex-start;}
-.attach-tile{
-  position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden;
-  border-radius:8px; border:1px solid var(--line-strong); background:var(--surface);
-  text-decoration:none; color:inherit; flex-shrink:0; transition:border-color .15s ease;
+.project-images{display:flex; gap:14px; margin-top:14px; flex-wrap:wrap; align-items:flex-start;}
+.project-images figure{margin:0;}
+.project-images img{
+  width:100%; height:auto; object-fit:contain; border-radius:8px; border:1px solid var(--line-strong);
+  display:block; background:var(--surface); cursor:zoom-in; transition:transform .2s ease, box-shadow .2s ease;
 }
-.attach-tile:hover{border-color:var(--accent);}
-.attach-tile img, .attach-tile embed{width:100%; height:100%; object-fit:contain; border:none; display:block; background:var(--surface);}
-.attach-tile .attach-caption{
-  position:absolute; left:0; right:0; bottom:0; padding:16px 8px 6px; text-align:center;
-  background:linear-gradient(transparent, rgba(0,0,0,.62)); color:#fff; font-size:.66rem;
-  font-family:"JetBrains Mono", monospace; letter-spacing:.01em;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+.project-images img:hover{ transform:scale(1.03); box-shadow:0 8px 20px rgba(0,0,0,.15); }
+.project-images figcaption{font-size:.66rem; color:var(--muted); margin-top:5px; font-family:"JetBrains Mono", monospace;}
+.project-images.size-s figure{width:100px;}
+.project-images.size-m figure{width:160px;}
+.project-images.size-l figure{width:260px;}
+@media (prefers-reduced-motion: reduce){
+  .cert-image, .project-images img{ transition:none; }
 }
-.attach-tile .attach-badge{
-  position:absolute; top:6px; left:6px; background:var(--ink); color:var(--surface);
-  font-family:"JetBrains Mono", monospace; font-size:.6rem; font-weight:600; letter-spacing:.04em;
-  padding:2px 6px; border-radius:4px; text-transform:uppercase; pointer-events:none;
-}
-.attach-tile.attach-file{flex-direction:column; gap:8px; padding:14px; text-align:center;}
-.attach-tile .attach-ext{
-  font-family:"JetBrains Mono", monospace; font-weight:700; font-size:.82rem; color:var(--accent);
-  border:1.5px solid var(--accent); border-radius:6px; padding:5px 10px; letter-spacing:.03em;
-}
-.attach-tile .attach-label{
-  font-size:.7rem; color:var(--ink-soft); line-height:1.35; max-height:2.7em; overflow:hidden;
-  word-break:break-word;
-}
-.project-attachments.size-s .attach-tile{width:110px; height:92px;}
-.project-attachments.size-m .attach-tile{width:170px; height:130px;}
-.project-attachments.size-l .attach-tile{width:250px; height:180px;}
-.project-attachments.size-s .attach-tile.attach-file .attach-ext{font-size:.68rem; padding:3px 7px;}
-.project-attachments.size-s .attach-tile.attach-file .attach-label{font-size:.62rem;}
 
 /* Experience / custom sections */
 .group{padding:18px 0; border-top:1px solid var(--line);}
@@ -293,6 +270,25 @@ p.blurb{max-width:62ch; color:var(--ink-soft); margin-bottom:0;}
 .subrow-list-item{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 9px; border:1px solid var(--line); border-radius:6px; margin-bottom:7px; font-size:.8rem; background:var(--surface);}
 .subrow-list-item .meta{color:var(--muted); font-size:.7rem; font-family:"JetBrains Mono", monospace;}
 .hint{font-size:.72rem; color:var(--muted); margin-top:-7px; margin-bottom:11px;}
+
+/* Lightbox — full-size photo viewing */
+.lightbox-overlay{
+  position:fixed; inset:0; background:rgba(15,13,10,0.9); display:flex; align-items:center; justify-content:center;
+  z-index:200; padding:32px; cursor:zoom-out; animation:lightboxIn .15s ease;
+}
+@keyframes lightboxIn{ from{opacity:0;} to{opacity:1;} }
+.lightbox-img{ max-width:100%; max-height:100%; object-fit:contain; border-radius:8px; box-shadow:0 24px 70px rgba(0,0,0,.5); cursor:default; }
+.lightbox-close{
+  position:fixed; top:18px; right:20px; width:40px; height:40px; border-radius:50%; border:none;
+  background:rgba(255,255,255,.12); color:#fff; font-size:1.4rem; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+}
+.lightbox-close:hover{ background:rgba(255,255,255,.22); }
+.lightbox-caption{
+  position:fixed; bottom:22px; left:0; right:0; text-align:center; color:rgba(255,255,255,.85);
+  font-family:"JetBrains Mono", monospace; font-size:.78rem; padding:0 20px;
+}
+@media (prefers-reduced-motion: reduce){ .lightbox-overlay{ animation:none; } }
 
 #toast-root{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:80; display:flex; flex-direction:column; gap:8px; align-items:center; max-width:92vw;}
 .toast{background:var(--ink); color:var(--bg); padding:9px 16px; border-radius:7px; font-size:.8rem; box-shadow:0 8px 24px rgba(0,0,0,.2);}

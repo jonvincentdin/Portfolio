@@ -17,7 +17,7 @@
   let data = null;        // live portfolio content, backed by the server (Vercel Blob via /api/data)
   let authState = {hasPassword:false, authenticated:false};
   let prefs = {theme:"paper", size:"md"};
-  let state = { editing:false, section:"home", dataLoadFailed:false, dataLoadError:"" };
+  let state = { editing:false, section:"home" };
 
   const page = document.getElementById("page");
   const modalRoot = document.getElementById("modal-root");
@@ -64,7 +64,8 @@
     </button>
     <div class="cert-box" id="certbox-${item.id}">
       <div class="cert-box-inner">
-        ${item.certImage?`<img class="cert-image" src="${esc(item.certImage)}" alt="Attached photo">`:''}
+        ${item.certImage?`<img class="cert-image" src="${esc(item.certImage)}" alt="Attached photo" data-action="open-lightbox" data-url="${esc(item.certImage)}">
+        <div class="photo-hint">Click the photo to view it full-size</div>`:''}
         ${linkRow}
       </div>
     </div>`;
@@ -105,6 +106,30 @@
     el.textContent = msg;
     toastRoot.appendChild(el);
     setTimeout(()=>{ el.remove(); }, 2800);
+  }
+
+  function openLightbox(url, caption){
+    if(!url) return;
+    const overlay = document.createElement("div");
+    overlay.className = "lightbox-overlay";
+    overlay.innerHTML = `
+      <button class="lightbox-close" aria-label="Close" type="button">×</button>
+      <img class="lightbox-img" src="${esc(url)}" alt="${esc(caption||'Photo')}">
+      ${caption ? `<div class="lightbox-caption">${esc(caption)}</div>` : ""}
+    `;
+    document.body.appendChild(overlay);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function close(){
+      overlay.remove();
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKey);
+    }
+    function onKey(e){ if(e.key === "Escape") close(); }
+    overlay.addEventListener("click", (e)=>{
+      if(e.target === overlay || e.target.closest(".lightbox-close")) close();
+    });
+    document.addEventListener("keydown", onKey);
   }
 
   function openMailClient(to, subject, body){
@@ -232,7 +257,9 @@
       profile:{name:"Your Name", title:"", description:"", photo:"", socials:[]},
       achievements:[], education:[], skills:[], experience:[], projectCategories:[], projectPhotoSize:"M",
       contact:{email:"", phone:"", location:"", availability:"", preferred:"", resumeUrl:"", blurb:"", links:[]},
-      customSections:[], hiddenSections:[], sectionOrder:[]
+      customSections:[],
+      profiles:[{id:"default", name:"Full Profile", hiddenSections:[], sectionOrder:[]}],
+      activeProfileId:"default"
     };
   }
   function migrateProjects(obj){
@@ -245,16 +272,44 @@
     }
     delete obj.projects;
   }
+  // Profiles let you configure different named views of the same portfolio
+  // (e.g. "School Profile" showing only some sections) WITHOUT duplicating
+  // any actual content or files — every profile shares the same
+  // achievements/projects/etc., each profile just has its own list of
+  // which sections are hidden and what order they appear in.
+  function migrateProfiles(obj){
+    if(!Array.isArray(obj.profiles) || obj.profiles.length===0){
+      obj.profiles = [{
+        id:"default",
+        name:"Full Profile",
+        hiddenSections: Array.isArray(obj.hiddenSections) ? obj.hiddenSections : [],
+        sectionOrder: Array.isArray(obj.sectionOrder) ? obj.sectionOrder : []
+      }];
+      obj.activeProfileId = "default";
+    }
+    if(!obj.activeProfileId || !obj.profiles.some(p=>p.id===obj.activeProfileId)){
+      obj.activeProfileId = obj.profiles[0].id;
+    }
+    delete obj.hiddenSections;
+    delete obj.sectionOrder;
+  }
+  function getActiveProfile(){
+    migrateProfiles(data);
+    return data.profiles.find(p=>p.id===data.activeProfileId) || data.profiles[0];
+  }
 
-  function ensureSectionOrder(){
+  function ensureSectionOrder(viewProfile){
     const allKeys = FIXED_SECTIONS.map(s=>s.key).concat(data.customSections.map(cs=>"custom:"+cs.id));
-    if(!Array.isArray(data.sectionOrder)) data.sectionOrder = [];
-    data.sectionOrder = data.sectionOrder.filter(k=>allKeys.includes(k));
-    allKeys.forEach(k=>{ if(!data.sectionOrder.includes(k)) data.sectionOrder.push(k); });
+    if(!Array.isArray(viewProfile.hiddenSections)) viewProfile.hiddenSections = [];
+    viewProfile.hiddenSections = viewProfile.hiddenSections.filter(k=>allKeys.includes(k));
+    if(!Array.isArray(viewProfile.sectionOrder)) viewProfile.sectionOrder = [];
+    viewProfile.sectionOrder = viewProfile.sectionOrder.filter(k=>allKeys.includes(k));
+    allKeys.forEach(k=>{ if(!viewProfile.sectionOrder.includes(k)) viewProfile.sectionOrder.push(k); });
   }
   function getOrderedSectionMeta(){
-    ensureSectionOrder();
-    return data.sectionOrder.map(key=>{
+    const viewProfile = getActiveProfile();
+    ensureSectionOrder(viewProfile);
+    return viewProfile.sectionOrder.map(key=>{
       if(key.startsWith("custom:")){
         const cs = data.customSections.find(c=>c.id===key.slice(7));
         return cs ? {key, label:cs.title, isCustom:true} : null;
@@ -265,64 +320,29 @@
   }
 
   async function loadAll(){
-    state.dataLoadFailed = false;
-    let loadError = "";
-
     try{
       const res = await fetch("/api/data", {credentials:"same-origin", cache:"no-store"});
-      if(res.ok){
-        data = await res.json();
-      } else {
-        const err = await res.json().catch(()=>({}));
-        loadError = err.error || `The server returned an error (status ${res.status}).`;
-        data = defaultData();
-        state.dataLoadFailed = true;
-      }
-    }catch(e){
-      loadError = "Couldn't reach the server.";
-      data = defaultData();
-      state.dataLoadFailed = true;
-    }
+      data = res.ok ? await res.json() : defaultData();
+    }catch(e){ data = defaultData(); }
     if(!data.customSections) data.customSections = [];
-    if(!data.hiddenSections) data.hiddenSections = [];
-    if(!data.sectionOrder) data.sectionOrder = [];
     if(!data.contact) data.contact = defaultData().contact;
     if(!data.contact.links) data.contact.links = [];
     if(!data.profile) data.profile = defaultData().profile;
     if(!data.projectPhotoSize) data.projectPhotoSize = "M";
     migrateProjects(data);
+    migrateProfiles(data);
+
+    // Always start from a clean, logged-out slate on a fresh page load —
+    // a refresh should never silently resume edit mode from a lingering
+    // session. This actually invalidates the session server-side (not
+    // just hiding it client-side), so re-entering edit mode always
+    // requires the password + email code again.
+    try{ await callAuthApi({action:"logout"}); }catch(e){ /* best effort */ }
 
     try{
       const res = await fetch("/api/auth", {credentials:"same-origin", cache:"no-store"});
-      if(res.ok){
-        authState = await res.json();
-      } else {
-        const err = await res.json().catch(()=>({}));
-        if(!loadError) loadError = err.error || `The server returned an error (status ${res.status}).`;
-        authState = {hasPassword:false, authenticated:false};
-        state.dataLoadFailed = true;
-      }
-    }catch(e){
-      if(!loadError) loadError = "Couldn't reach the server.";
-      authState = {hasPassword:false, authenticated:false};
-      state.dataLoadFailed = true;
-    }
-    state.dataLoadError = loadError;
-
-    // Security: never resume an editing session across a page load/refresh —
-    // always require the password plus the emailed code again. If a session
-    // cookie was still valid from before, clear it server-side too so a
-    // stolen/leftover cookie can't quietly keep edit access alive.
-    if(authState.authenticated){
-      try{
-        await fetch("/api/auth", {
-          method:"POST", credentials:"same-origin",
-          headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({action:"logout"})
-        });
-      }catch(e){ /* best-effort */ }
-    }
-    authState.authenticated = false;
+      authState = res.ok ? await res.json() : {hasPassword:false, authenticated:false};
+    }catch(e){ authState = {hasPassword:false, authenticated:false}; }
     state.editing = false;
 
     try{
@@ -333,10 +353,6 @@
   }
 
   async function saveData(){
-    if(state.dataLoadFailed){
-      showToast("Can't save — your real content didn't load, so saving now would overwrite it. Fix the connection and hit Retry first.", true);
-      return false;
-    }
     try{
       const res = await fetch("/api/data", {
         method:"POST", credentials:"same-origin",
@@ -369,24 +385,17 @@
   /* ============ Render root ============ */
   function render(){
     const editing = state.editing;
-    if(!editing && data.hiddenSections.includes(state.section)){ state.section = "home"; }
+    const viewProfile = getActiveProfile();
+    if(!editing && viewProfile.hiddenSections.includes(state.section)){ state.section = "home"; }
 
     let html = "";
-    if(state.dataLoadFailed){
-      html += `<div class="load-error-banner" role="alert">
-        <div><strong>Couldn't load your saved content${state.dataLoadError?` (${esc(state.dataLoadError)})`:''}.</strong>
-        Showing placeholder content instead — editing is disabled so nothing here can accidentally overwrite your real data.
-        This usually means the database (Vercel Blob storage) isn't connected to this deployment, or an environment variable is missing/hasn't taken effect yet. Check your Vercel project's Storage tab and Environment Variables, redeploy if you just changed them, then retry.</div>
-        <button class="btn ghost sm" data-action="retry-load" style="flex-shrink:0;">Retry</button>
-      </div>`;
-    }
     html += renderSiteHeader(editing);
     html += renderTopbar(editing);
     if(editing) html += renderEditbar();
 
     html += `<nav class="tabs-row" role="tablist">`;
     getOrderedSectionMeta().forEach(s=>{
-      const hidden = !s.isCustom && data.hiddenSections.includes(s.key);
+      const hidden = !s.isCustom && viewProfile.hiddenSections.includes(s.key);
       if(hidden && !editing) return;
       html += `<button class="tab ${state.section===s.key?'active':''}" role="tab" data-action="nav" data-section="${s.key}" style="${hidden?'opacity:.45;':''}">${esc(s.label)}${hidden?' <span class="mono" style="font-size:.62rem;">(hidden)</span>':''}</button>`;
     });
@@ -441,8 +450,10 @@
   }
 
   function renderEditbar(){
+    const viewProfile = getActiveProfile();
     let html = `<div class="editbar">`;
     html += `<span>You're editing — changes save automatically for everyone.</span>`;
+    html += `<button class="linklike" data-action="manage-profiles">Viewing: ${esc(viewProfile.name)} ▾</button>`;
     html += `<button class="linklike" data-action="manage-sections">Manage sections</button>`;
     html += `<button class="linklike" data-action="change-password">Change password</button>`;
     html += `<button class="linklike" data-action="logout">Log out</button>`;
@@ -481,6 +492,7 @@
     if(editing){
       html += `<div class="photo-actions">
         <label class="btn ghost sm" for="profile_photo_file" style="cursor:pointer;">${p.photo ? "Change photo" : "Add photo"}</label>
+        <button class="btn ghost sm" data-action="browse-profile-photo">Browse library</button>
         ${p.photo ? `<button class="btn ghost sm" data-action="remove-photo" style="border-color:var(--danger); color:var(--danger);">Remove</button>` : ""}
         <input type="file" id="profile_photo_file" accept="image/*" style="display:none;">
       </div>`;
@@ -530,8 +542,8 @@
       const sizes = ["S","M","L"];
       const current = data.projectPhotoSize || "M";
       html += `<div class="prefs" style="margin-bottom:22px;">
-        <span class="prefs-label">Attachment tile size</span>
-        <div class="prefs-group" role="group" aria-label="Project attachment tile size">
+        <span class="prefs-label">Photo size</span>
+        <div class="prefs-group" role="group" aria-label="Project photo size">
           ${sizes.map(s=>`<button data-action="set-project-photo-size" data-value="${s}" class="${current===s?'active':''}">${s}</button>`).join("")}
         </div>
       </div>`;
@@ -572,64 +584,36 @@
       </div>
       ${pr.description?`<p class="entry-desc" style="margin-top:6px;">${nl2br(pr.description)}</p>`:''}
       ${(pr.tags&&pr.tags.length)?`<div style="margin-top:8px;">${pr.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`:''}
-      ${renderProjectAttachments(pr)}
+      ${renderProjectLinksAndFiles(pr)}
+      ${renderProjectImages(pr)}
     </div>`;
   }
-  function getFileExt(url){
-    try{
-      const clean = String(url||"").split(/[?#]/)[0];
-      const m = clean.match(/\.([a-zA-Z0-9]{1,5})$/);
-      return m ? m[1].toLowerCase() : "";
-    }catch(e){ return ""; }
-  }
-  function renderImageTile(img, headerFallback){
-    const caption = img.caption || "";
-    const title = caption || headerFallback || "Photo";
-    return `<a class="attach-tile attach-image" href="${esc(img.url)}" target="_blank" rel="noopener" title="${esc(title)}">
-      <img src="${esc(img.url)}" alt="${esc(title)}" loading="lazy">
-      ${caption?`<span class="attach-caption">${esc(caption)}</span>`:''}
-    </a>`;
-  }
-  function renderFileTile(f){
-    const ext = getFileExt(f.url);
-    const label = f.label || "File";
-    if(ext === "pdf"){
-      return `<a class="attach-tile attach-pdf" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(label)}">
-        <embed src="${esc(f.url)}" type="application/pdf">
-        <span class="attach-badge">PDF</span>
-        <span class="attach-caption">${esc(label)}</span>
-      </a>`;
-    }
-    const extLabel = ext ? ext.toUpperCase() : "FILE";
-    return `<a class="attach-tile attach-file" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(label)}">
-      <span class="attach-ext">${esc(extLabel)}</span>
-      <span class="attach-label">${esc(label)}</span>
-    </a>`;
-  }
-  function renderProjectAttachments(pr){
-    const links = pr.links || [];
-    const files = pr.files || [];
-    const images = pr.images || [];
-    const total = links.length + files.length + images.length;
-    if(total === 0) return "";
-    const hasTiles = files.length + images.length > 0;
-    const linksHtml = links.length ? `<div class="cert-links"${hasTiles?' style="margin-bottom:14px;"':''}>${links.map(l=>{
-      const badge = l.type === "github" ? "GitHub ↗" : (l.type === "live" || l.type==="demo" ? "Live ↗" : "Link ↗");
-      return `<a class="cert-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || badge)}</a>`;
-    }).join("")}</div>` : '';
-    const sizeClass = "size-" + (data.projectPhotoSize || "M").toLowerCase();
-    const tiles = [...images.map(im=>renderImageTile(im, pr.header)), ...files.map(f=>renderFileTile(f))].join("");
-    const tilesHtml = tiles ? `<div class="project-attachments ${sizeClass}">${tiles}</div>` : '';
+  function renderProjectLinksAndFiles(pr){
+    const all = [...(pr.links||[]), ...(pr.files||[]).map(f=>({...f, type:"download"}))];
+    if(all.length===0) return "";
+    const linksHtml = all.map(l=>{
+      const badge = l.type === "download" ? "Download ↓" : (l.type === "github" ? "GitHub ↗" : (l.type === "live" || l.type==="demo" ? "Live ↗" : "Link ↗"));
+      return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || badge)}</a>`;
+    }).join("");
     return `<button class="cert-trigger" data-action="toggle-cert" data-id="${pr.id}">
-      <span class="cert-trigger-label">Files & links (${total})</span>
+      <span class="cert-trigger-label">Links & files (${all.length})</span>
       <span class="cert-chevron">⌄</span>
     </button>
     <div class="cert-box" id="certbox-${pr.id}">
       <div class="cert-box-inner">
-        ${linksHtml}
-        ${tilesHtml}
+        <div class="cert-links">${linksHtml}</div>
       </div>
     </div>`;
+  }
+  function renderProjectImages(pr){
+    if(!pr.images || pr.images.length===0) return "";
+    const sizeClass = "size-" + (data.projectPhotoSize || "M").toLowerCase();
+    let html = `<div class="project-images ${sizeClass}">`;
+    pr.images.forEach(img=>{
+      html += `<figure><img src="${esc(img.url)}" alt="${esc(img.caption||pr.header)}" loading="lazy" data-action="open-lightbox" data-url="${esc(img.url)}" data-caption="${esc(img.caption||'')}">${img.caption?`<figcaption>${esc(img.caption)}</figcaption>`:''}</figure>`;
+    });
+    html += `</div>`;
+    return html;
   }
 
   /* ============ SKILLS ============ */
@@ -793,7 +777,7 @@
       if(hasContactLinks){
         html += `<div class="socials-row">` + c.links.map(l=>`<a class="social-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join("") + `</div>`;
       } else if(editing){
-        html += `<div class="hint" style="margin:0;">No extra links yet — add GitHub, LinkedIn, a scheduling page, WhatsApp, Discord, or anything else you'd like here.</div>`;
+        html += `<div class="hint" style="margin:0;">No extra links yet — add a scheduling page, WhatsApp, Discord, or anything else you'd like here.</div>`;
       }
     }
 
@@ -811,6 +795,59 @@
 
   /* ============ Modal helpers ============ */
   function closeModal(){ modalRoot.innerHTML = ""; }
+
+  /* ============ Media library (reuse previously uploaded files) ============ */
+  async function fetchMediaLibrary(){
+    try{
+      const res = await fetch("/api/media", {credentials:"same-origin", cache:"no-store"});
+      const json = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(json.error || "Couldn't load your library.");
+      return json.items || [];
+    }catch(err){
+      showToast(err.message || "Couldn't load your library.", true);
+      return null;
+    }
+  }
+  function libraryFileName(pathname){
+    const base = (pathname || "").split("/").pop() || "file";
+    // uploads are stored as "<uuid>-<original name>" — strip the uuid prefix for display
+    return base.replace(/^[a-f0-9-]{20,}-/i, "");
+  }
+  async function openMediaLibraryModal(onSelect, imagesOnly){
+    const items = await fetchMediaLibrary();
+    if(items === null) return; // error already toasted
+    renderMediaLibraryModal(items, onSelect, imagesOnly);
+  }
+  function renderMediaLibraryModal(items, onSelect, imagesOnly){
+    const filtered = imagesOnly ? items.filter(it=>it.contentType && it.contentType.startsWith("image/")) : items;
+    const grid = filtered.length ? filtered.map(it=>{
+      const name = libraryFileName(it.pathname);
+      const isImage = it.contentType && it.contentType.startsWith("image/");
+      const thumb = isImage
+        ? `<img src="${esc(it.url)}" alt="${esc(name)}" style="width:100%; height:84px; object-fit:cover; border-radius:6px; border:1px solid var(--line-strong); display:block;">`
+        : `<div style="width:100%; height:84px; border-radius:6px; border:1px solid var(--line-strong); display:flex; align-items:center; justify-content:center; background:var(--bg); font-family:'JetBrains Mono',monospace; font-size:.62rem; color:var(--muted); text-align:center; padding:6px; overflow:hidden;">${esc(name.slice(0,26))}</div>`;
+      return `<button type="button" class="media-item" data-url="${esc(it.url)}" data-name="${esc(name)}" style="display:block; width:100%; text-align:left; background:none; border:none; padding:0; cursor:pointer;">
+        ${thumb}
+        <div style="font-size:.62rem; color:var(--muted); margin-top:4px; font-family:'JetBrains Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(name)}</div>
+      </button>`;
+    }).join("") : `<div class="hint" style="margin:0;">${imagesOnly ? "No photos uploaded yet." : "No files uploaded yet."} Upload one somewhere first and it'll show up here to reuse.</div>`;
+
+    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
+      <div class="modal-box" role="dialog" aria-modal="true" style="max-width:600px;">
+        <h3>Choose from your library</h3>
+        <div class="modal-sub">Reuse something you've already uploaded instead of uploading a duplicate copy.</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(108px,1fr)); gap:10px; max-height:52vh; overflow-y:auto; margin-bottom:14px;">${grid}</div>
+        <div class="modal-actions"><span class="spacer"></span>
+          <button class="btn ghost" data-action="modal-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+    modalRoot.querySelectorAll(".media-item").forEach(btn=>{
+      btn.onclick = ()=>{ onSelect(btn.dataset.url, btn.dataset.name); };
+    });
+  }
 
   function openFormModal(cfg){
     let html = `<div class="modal-overlay" data-action="overlay-close">
@@ -857,8 +894,6 @@
   }
 
   /* ============ Auth modals ============ */
-  const OWNER_EMAIL_DISPLAY = "jonvincent.din@gmail.com";
-
   async function callAuthApi(payload){
     const res = await fetch("/api/auth", {
       method:"POST", credentials:"same-origin",
@@ -869,167 +904,82 @@
     return {ok: res.ok, ...json};
   }
 
-  // Shared step 2 for every auth flow below: enter the 6-digit code that was
-  // just emailed. Built as its own modal (rather than reusing openFormModal)
-  // because it needs to stay open through an async verify/resend round trip
-  // instead of closing immediately on submit.
-  function openCodeStepModal(opts){
-    let token = opts.token;
-    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
-      <div class="modal-box" role="dialog" aria-modal="true">
-        <h3>Enter verification code</h3>
-        <div class="modal-sub">${esc(opts.description)}</div>
-        <div class="field"><label>6-digit code</label><input id="otp_code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"></div>
-        <div class="hint" style="margin:0 0 10px;">Code expires in 10 minutes. <button type="button" class="textlink" data-action="otp-resend">Resend code</button></div>
-        <div class="modal-actions">
-          <button class="btn ghost" data-action="modal-cancel">Cancel</button>
-          <span class="spacer"></span>
-          <button class="btn accent" data-action="otp-verify">Verify</button>
-        </div>
-      </div>
-    </div>`;
-    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
-    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
-
-    const verifyBtn = modalRoot.querySelector('[data-action="otp-verify"]');
-    const codeInput = document.getElementById("otp_code");
-    codeInput.focus();
-
-    const doVerify = async ()=>{
-      const code = codeInput.value.trim();
-      if(!code){ showToast("Enter the code from your email.", true); return; }
-      verifyBtn.disabled = true; verifyBtn.textContent = "Verifying…";
-      const result = await callAuthApi({action:"verify-code", token, code});
-      verifyBtn.disabled = false; verifyBtn.textContent = "Verify";
-      if(!result.ok){ showToast(result.error || "That code is wrong or has expired.", true); return; }
-      closeModal();
-      opts.onVerified();
-    };
-    verifyBtn.onclick = doVerify;
-    codeInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doVerify(); } });
-
-    modalRoot.querySelector('[data-action="otp-resend"]').onclick = async (e)=>{
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      const result = await callAuthApi({action:"resend-code", token});
-      btn.disabled = false;
-      if(!result.ok){ showToast(result.error || "Couldn't resend the code.", true); return; }
-      token = result.token;
-      showToast(`New code sent to ${OWNER_EMAIL_DISPLAY}`);
-    };
+  function openCodeModal(challenge, verifyAction, onSuccess){
+    openFormModal({
+      title:"Enter verification code",
+      sub:`We sent a 6-digit code to your email — it expires in 10 minutes.`,
+      fields:[{name:"code", label:"Verification code", placeholder:"000000", required:true}],
+      submitLabel:"Verify",
+      onSubmit: async(v)=>{
+        const result = await callAuthApi({action:verifyAction, challenge, code:v.code.trim()});
+        if(!result.ok){ showToast(result.error || "That code isn't right.", true); return; }
+        onSuccess();
+      }
+    });
   }
 
   function openAuthModal(){
     if(!authState.hasPassword){
-      modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
-        <div class="modal-box" role="dialog" aria-modal="true">
-          <h3>Set an edit password</h3>
-          <div class="modal-sub">This unlocks edit mode for everyone who knows it — it's hashed before storage, never kept as plain text. We'll also email a 6-digit code to ${esc(OWNER_EMAIL_DISPLAY)} to confirm it's you.</div>
-          <div class="field"><label>New password</label><input id="su_pw" type="password"></div>
-          <div class="field"><label>Confirm password</label><input id="su_pw2" type="password"></div>
-          <div class="modal-actions">
-            <button class="btn ghost" data-action="modal-cancel">Cancel</button>
-            <span class="spacer"></span>
-            <button class="btn accent" data-action="su-submit">Continue</button>
-          </div>
-        </div>
-      </div>`;
-      modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
-      modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
-      const submitBtn = modalRoot.querySelector('[data-action="su-submit"]');
-      submitBtn.onclick = async ()=>{
-        const pw = document.getElementById("su_pw").value;
-        const pw2 = document.getElementById("su_pw2").value;
-        if(pw !== pw2){ showToast("Passwords don't match.", true); return; }
-        if(pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
-        submitBtn.disabled = true; submitBtn.textContent = "Sending code…";
-        const result = await callAuthApi({action:"setup", password:pw});
-        submitBtn.disabled = false; submitBtn.textContent = "Continue";
-        if(!result.ok){ showToast(result.error || "Couldn't set the password.", true); return; }
-        openCodeStepModal({
-          token: result.token,
-          description: `We emailed a 6-digit code to ${OWNER_EMAIL_DISPLAY} to confirm it's you.`,
-          onVerified: ()=>{
+      openFormModal({
+        title:"Set an edit password",
+        sub:"This unlocks edit mode for everyone who knows it — it's checked on the server and hashed before storage, never kept as plain text. We'll also email a verification code to confirm it's really you before it's active.",
+        fields:[
+          {name:"pw", label:"New password", type:"password", required:true},
+          {name:"pw2", label:"Confirm password", type:"password", required:true}
+        ],
+        submitLabel:"Send verification code",
+        onSubmit:async(v)=>{
+          if(v.pw !== v.pw2){ showToast("Passwords don't match.", true); return; }
+          if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
+          const result = await callAuthApi({action:"setup-request", password:v.pw});
+          if(!result.ok){ showToast(result.error || "Couldn't start setup.", true); return; }
+          showToast("Verification code sent to your email");
+          openCodeModal(result.challenge, "setup-verify", ()=>{
             authState = {hasPassword:true, authenticated:true};
             state.editing = true; render();
             showToast("Edit mode unlocked");
-          }
-        });
-      };
+          });
+        }
+      });
     } else {
-      modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
-        <div class="modal-box" role="dialog" aria-modal="true">
-          <h3>Enter edit password</h3>
-          <div class="modal-sub">We'll also email a 6-digit code to ${esc(OWNER_EMAIL_DISPLAY)} to confirm it's you.</div>
-          <div class="field"><label>Password</label><input id="li_pw" type="password"></div>
-          <div class="modal-actions">
-            <button class="btn ghost" data-action="modal-cancel">Cancel</button>
-            <span class="spacer"></span>
-            <button class="btn accent" data-action="li-submit">Continue</button>
-          </div>
-        </div>
-      </div>`;
-      modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
-      modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
-      const submitBtn = modalRoot.querySelector('[data-action="li-submit"]');
-      const pwInput = document.getElementById("li_pw");
-      pwInput.focus();
-      const doSubmit = async ()=>{
-        const pw = pwInput.value;
-        if(!pw){ showToast("Enter your password.", true); return; }
-        submitBtn.disabled = true; submitBtn.textContent = "Sending code…";
-        const result = await callAuthApi({action:"login", password:pw});
-        submitBtn.disabled = false; submitBtn.textContent = "Continue";
-        if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
-        openCodeStepModal({
-          token: result.token,
-          description: `We emailed a 6-digit code to ${OWNER_EMAIL_DISPLAY} to confirm it's you.`,
-          onVerified: ()=>{
+      openFormModal({
+        title:"Enter edit password",
+        fields:[{name:"pw", label:"Password", type:"password", required:true}],
+        submitLabel:"Send verification code",
+        onSubmit:async(v)=>{
+          const result = await callAuthApi({action:"login-request", password:v.pw});
+          if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
+          showToast("Verification code sent to your email");
+          openCodeModal(result.challenge, "login-verify", ()=>{
             authState = {hasPassword:true, authenticated:true};
             state.editing = true; render();
             showToast("Edit mode unlocked");
-          }
-        });
-      };
-      submitBtn.onclick = doSubmit;
-      pwInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doSubmit(); } });
+          });
+        }
+      });
     }
   }
-
   function openChangePasswordModal(){
-    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
-      <div class="modal-box" role="dialog" aria-modal="true">
-        <h3>Change edit password</h3>
-        <div class="modal-sub">We'll email a 6-digit code to ${esc(OWNER_EMAIL_DISPLAY)} to confirm it's you before the change takes effect.</div>
-        <div class="field"><label>Current password</label><input id="cp_current" type="password"></div>
-        <div class="field"><label>New password</label><input id="cp_next" type="password"></div>
-        <div class="field"><label>Confirm new password</label><input id="cp_next2" type="password"></div>
-        <div class="modal-actions">
-          <button class="btn ghost" data-action="modal-cancel">Cancel</button>
-          <span class="spacer"></span>
-          <button class="btn accent" data-action="cp-submit">Continue</button>
-        </div>
-      </div>
-    </div>`;
-    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
-    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
-    const submitBtn = modalRoot.querySelector('[data-action="cp-submit"]');
-    submitBtn.onclick = async ()=>{
-      const current = document.getElementById("cp_current").value;
-      const next = document.getElementById("cp_next").value;
-      const next2 = document.getElementById("cp_next2").value;
-      if(next !== next2){ showToast("New passwords don't match.", true); return; }
-      if(next.length < 4){ showToast("Use at least 4 characters.", true); return; }
-      submitBtn.disabled = true; submitBtn.textContent = "Sending code…";
-      const result = await callAuthApi({action:"change", currentPassword:current, newPassword:next});
-      submitBtn.disabled = false; submitBtn.textContent = "Continue";
-      if(!result.ok){ showToast(result.error || "Couldn't update the password.", true); return; }
-      openCodeStepModal({
-        token: result.token,
-        description: `We emailed a 6-digit code to ${OWNER_EMAIL_DISPLAY} to confirm it's you.`,
-        onVerified: ()=>{ showToast("Password updated"); }
-      });
-    };
+    openFormModal({
+      title:"Change edit password",
+      sub:"You'll need a verification code from your email to confirm this change.",
+      fields:[
+        {name:"current", label:"Current password", type:"password", required:true},
+        {name:"next", label:"New password", type:"password", required:true},
+        {name:"next2", label:"Confirm new password", type:"password", required:true}
+      ],
+      submitLabel:"Send verification code",
+      onSubmit:async(v)=>{
+        if(v.next !== v.next2){ showToast("New passwords don't match.", true); return; }
+        if(v.next.length < 4){ showToast("Use at least 4 characters.", true); return; }
+        const result = await callAuthApi({action:"change-request", currentPassword:v.current, newPassword:v.next});
+        if(!result.ok){ showToast(result.error || "Couldn't start the password change.", true); return; }
+        showToast("Verification code sent to your email");
+        openCodeModal(result.challenge, "change-verify", ()=>{
+          showToast("Password updated");
+        });
+      }
+    });
   }
   async function logout(){
     await callAuthApi({action:"logout"});
@@ -1054,6 +1004,95 @@
   }
 
   /* ============ Socials editor ============ */
+  /* ============ Profiles ============ */
+  let mpEditingId = null;
+  function openManageProfilesModal(){ mpEditingId = null; renderManageProfilesModal(); }
+  function renderManageProfilesModal(){
+    const rows = data.profiles.map(p=>{
+      const isActive = p.id === data.activeProfileId;
+      if(mpEditingId === p.id){
+        return `<div class="subrow" style="margin-bottom:9px;">
+          <div class="field" style="margin-bottom:8px;"><label>Profile name</label><input id="mp_rename_input" value="${esc(p.name)}"></div>
+          <div style="display:flex; gap:10px;">
+            <button class="btn ghost sm" type="button" data-action="mp-rename-save" data-id="${p.id}">Save</button>
+            <button class="btn ghost sm" type="button" data-action="mp-rename-cancel">Cancel</button>
+          </div>
+        </div>`;
+      }
+      return `<div class="subrow-list-item"><span>${esc(p.name)} ${isActive?'<span class="meta">viewing now</span>':''}</span>
+        <span style="display:flex; gap:10px; flex-shrink:0; flex-wrap:wrap;">
+          ${!isActive?`<button class="textlink" data-id="${p.id}" data-action="mp-activate">View this</button>`:''}
+          <button class="textlink" data-id="${p.id}" data-action="mp-rename-start">Rename</button>
+          ${data.profiles.length>1?`<button class="textlink danger" data-id="${p.id}" data-action="mp-delete">Delete</button>`:''}
+        </span></div>`;
+    }).join("");
+
+    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <h3>Profiles</h3>
+        <div class="modal-sub">Different named setups for your portfolio — e.g. a "School Profile" that only shows some sections. Every profile shares the same underlying content and files; nothing gets duplicated, they just show, hide, and order sections differently. Whichever one you're viewing is what every visitor sees.</div>
+        ${rows}
+        <div class="subrow">
+          <div class="field" style="margin-bottom:8px;"><label>New profile name</label><input id="mp_name" placeholder="e.g. School Profile"></div>
+          <button class="btn ghost sm" type="button" data-action="mp-add">+ Add profile</button>
+        </div>
+        <div class="modal-actions"><span class="spacer"></span>
+          <button class="btn accent" data-action="modal-cancel">Done</button>
+        </div>
+      </div>
+    </div>`;
+    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+
+    modalRoot.querySelectorAll('[data-action="mp-activate"]').forEach(btn=>{
+      btn.onclick = ()=>{ data.activeProfileId = btn.dataset.id; persistAndRender(); renderManageProfilesModal(); };
+    });
+    modalRoot.querySelectorAll('[data-action="mp-rename-start"]').forEach(btn=>{
+      btn.onclick = ()=>{ mpEditingId = btn.dataset.id; renderManageProfilesModal(); };
+    });
+    const cancelBtn = modalRoot.querySelector('[data-action="mp-rename-cancel"]');
+    if(cancelBtn){ cancelBtn.onclick = ()=>{ mpEditingId = null; renderManageProfilesModal(); }; }
+    const saveBtn = modalRoot.querySelector('[data-action="mp-rename-save"]');
+    if(saveBtn){
+      saveBtn.onclick = ()=>{
+        const p = data.profiles.find(x=>x.id===saveBtn.dataset.id);
+        const name = document.getElementById("mp_rename_input").value.trim();
+        if(!name){ showToast("Give it a name.", true); return; }
+        if(p) p.name = name;
+        mpEditingId = null;
+        persistAndRender();
+        renderManageProfilesModal();
+      };
+    }
+    modalRoot.querySelectorAll('[data-action="mp-delete"]').forEach(btn=>{
+      btn.onclick = ()=>{
+        if(data.profiles.length<=1){ showToast("You need at least one profile.", true); return; }
+        const idx = data.profiles.findIndex(x=>x.id===btn.dataset.id);
+        if(idx<0) return;
+        const wasActive = data.profiles[idx].id === data.activeProfileId;
+        data.profiles.splice(idx,1);
+        if(wasActive) data.activeProfileId = data.profiles[0].id;
+        persistAndRender();
+        renderManageProfilesModal();
+      };
+    });
+    modalRoot.querySelector('[data-action="mp-add"]').onclick = ()=>{
+      const name = document.getElementById("mp_name").value.trim();
+      if(!name){ showToast("Give the new profile a name.", true); return; }
+      const activeP = getActiveProfile();
+      const newProfile = {
+        id: uid(), name,
+        hiddenSections: [...activeP.hiddenSections],
+        sectionOrder: [...activeP.sectionOrder]
+      };
+      data.profiles.push(newProfile);
+      data.activeProfileId = newProfile.id;
+      persistAndRender();
+      renderManageProfilesModal();
+      showToast(`"${name}" created — customize its sections with "Manage sections."`);
+    };
+  }
+
   let tempSocials = null;
   let tempSocialsEditIdx = null;
   function openSocialsModal(){ tempSocials = structuredClone(data.profile.socials || []); tempSocialsEditIdx = null; renderSocialsModal(); }
@@ -1162,11 +1201,13 @@
         ${r.certImage ? `<div class="subrow-list-item"><span>Photo attached</span><button class="textlink danger" type="button" data-action="rec-remove-photo">Remove photo</button></div>` : ''}
         <div class="field"><label>${r.certImage?'Replace photo':'Upload photo'}</label><input type="file" id="rec_cert_file" accept="image/*"></div>
         <div class="field"><label>Or paste an image URL</label><input id="rec_cert_url" placeholder="https://..."></div>
+        <button class="btn ghost sm" type="button" data-action="rec-browse-photo" style="margin-bottom:12px;">Browse library</button>
 
         ${r.certFileUrl ? `<div class="subrow-list-item"><span>File attached${r.certFileLabel?': '+esc(r.certFileLabel):''}</span><button class="textlink danger" type="button" data-action="rec-remove-file">Remove file</button></div>` : ''}
         <div class="field"><label>File label (optional)</label><input id="rec_cert_file_label" value="${esc(r.certFileLabel||'')}" placeholder="e.g. Document.pdf"></div>
         <div class="field"><label>${r.certFileUrl?'Replace file':'Upload a file'}</label><input type="file" id="rec_cert_file_upload"></div>
         <div class="field"><label>Or paste a file URL</label><input id="rec_cert_file_url" placeholder="Link to a downloadable file"></div>
+        <button class="btn ghost sm" type="button" data-action="rec-browse-file">Browse library</button>
 
         <div class="modal-actions">
           ${isEdit ? '<button class="btn ghost sm" style="border-color:var(--danger); color:var(--danger);" data-action="rec-delete">Delete</button>' : ''}
@@ -1183,6 +1224,18 @@
     if(removeBtn){ removeBtn.onclick = ()=>{ syncRecordFields(); r.certImage=""; renderRecordModal(isEdit); }; }
     const removeFileBtn = modalRoot.querySelector('[data-action="rec-remove-file"]');
     if(removeFileBtn){ removeFileBtn.onclick = ()=>{ syncRecordFields(); r.certFileUrl=""; r.certFileLabel=""; renderRecordModal(isEdit); }; }
+    modalRoot.querySelector('[data-action="rec-browse-photo"]').onclick = ()=>{
+      syncRecordFields();
+      openMediaLibraryModal((url)=>{ r.certImage = url; renderRecordModal(isEdit); }, true);
+    };
+    modalRoot.querySelector('[data-action="rec-browse-file"]').onclick = ()=>{
+      syncRecordFields();
+      openMediaLibraryModal((url, name)=>{
+        r.certFileUrl = url;
+        if(!r.certFileLabel) r.certFileLabel = name;
+        renderRecordModal(isEdit);
+      }, false);
+    };
     if(isEdit){
       modalRoot.querySelector('[data-action="rec-delete"]').onclick = ()=>{ deleteRecord(kind, r.id); closeModal(); };
     }
@@ -1363,11 +1416,13 @@
         ${r.certImage ? `<div class="subrow-list-item"><span>Photo attached</span><button class="textlink danger" type="button" data-action="si-remove-photo">Remove photo</button></div>` : ''}
         <div class="field"><label>${r.certImage?'Replace photo':'Upload photo'}</label><input type="file" id="si_cert_file" accept="image/*"></div>
         <div class="field"><label>Or paste an image URL</label><input id="si_cert_url" placeholder="https://..."></div>
+        <button class="btn ghost sm" type="button" data-action="si-browse-photo" style="margin-bottom:12px;">Browse library</button>
 
         ${r.certFileUrl ? `<div class="subrow-list-item"><span>File attached${r.certFileLabel?': '+esc(r.certFileLabel):''}</span><button class="textlink danger" type="button" data-action="si-remove-file">Remove file</button></div>` : ''}
         <div class="field"><label>File label (optional)</label><input id="si_cert_file_label" value="${esc(r.certFileLabel||'')}" placeholder="e.g. Document.pdf"></div>
         <div class="field"><label>${r.certFileUrl?'Replace file':'Upload a file'}</label><input type="file" id="si_cert_file_upload"></div>
         <div class="field"><label>Or paste a file URL</label><input id="si_cert_file_url" placeholder="Link to a downloadable file"></div>
+        <button class="btn ghost sm" type="button" data-action="si-browse-file">Browse library</button>
 
         <div class="modal-actions">
           ${isEdit ? '<button class="btn ghost sm" style="border-color:var(--danger); color:var(--danger);" data-action="si-delete">Delete</button>' : ''}
@@ -1384,6 +1439,18 @@
     if(removeBtn){ removeBtn.onclick = ()=>{ syncSectionItemFields(); r.certImage=""; renderSectionItemModal(isEdit); }; }
     const removeFileBtn = modalRoot.querySelector('[data-action="si-remove-file"]');
     if(removeFileBtn){ removeFileBtn.onclick = ()=>{ syncSectionItemFields(); r.certFileUrl=""; r.certFileLabel=""; renderSectionItemModal(isEdit); }; }
+    modalRoot.querySelector('[data-action="si-browse-photo"]').onclick = ()=>{
+      syncSectionItemFields();
+      openMediaLibraryModal((url)=>{ r.certImage = url; renderSectionItemModal(isEdit); }, true);
+    };
+    modalRoot.querySelector('[data-action="si-browse-file"]').onclick = ()=>{
+      syncSectionItemFields();
+      openMediaLibraryModal((url, name)=>{
+        r.certFileUrl = url;
+        if(!r.certFileLabel) r.certFileLabel = name;
+        renderSectionItemModal(isEdit);
+      }, false);
+    };
     if(isEdit){
       modalRoot.querySelector('[data-action="si-delete"]').onclick = ()=>{
         const cs = data.customSections.find(c=>c.id===tempSectionItemParentId);
@@ -1434,8 +1501,9 @@
   /* ============ Manage sections ============ */
   function openManageSectionsModal(){ renderManageSectionsModal(); }
   function renderManageSectionsModal(){
-    ensureSectionOrder();
-    const order = data.sectionOrder;
+    const viewProfile = getActiveProfile();
+    ensureSectionOrder(viewProfile);
+    const order = viewProfile.sectionOrder;
     const rows = order.map((key, idx)=>{
       let label, isCustom = key.startsWith("custom:"), hidden = false;
       if(isCustom){
@@ -1446,7 +1514,7 @@
         const fs = FIXED_SECTIONS.find(s=>s.key===key);
         if(!fs) return "";
         label = fs.label;
-        hidden = data.hiddenSections.includes(key);
+        hidden = viewProfile.hiddenSections.includes(key);
       }
       const isFirst = idx===0, isLast = idx===order.length-1;
       const tag = isCustom ? '<span class="meta">custom</span>' : (hidden ? '<span class="meta">hidden</span>' : '<span class="meta">visible</span>');
@@ -1465,7 +1533,7 @@
     modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay-close">
       <div class="modal-box" role="dialog" aria-modal="true">
         <h3>Manage sections</h3>
-        <div class="modal-sub">Reorder tabs with the arrows, hide built-in sections you don't need, or remove custom ones.</div>
+        <div class="modal-sub">Editing the <strong>${esc(viewProfile.name)}</strong> profile. Reorder tabs with the arrows, hide built-in sections you don't need, or remove custom ones. Switch profiles from "Viewing: ${esc(viewProfile.name)}" in the edit bar.</div>
         ${rows}
         <div class="modal-actions"><span class="spacer"></span>
           <button class="btn accent" data-action="modal-cancel">Done</button>
@@ -1477,9 +1545,9 @@
     modalRoot.querySelectorAll('[data-action="toggle-hide-section"]').forEach(btn=>{
       btn.onclick = ()=>{
         const key = btn.dataset.key;
-        const idx = data.hiddenSections.indexOf(key);
-        if(idx>-1){ data.hiddenSections.splice(idx,1); } else { data.hiddenSections.push(key); }
-        render(); saveData();
+        const idx = viewProfile.hiddenSections.indexOf(key);
+        if(idx>-1){ viewProfile.hiddenSections.splice(idx,1); } else { viewProfile.hiddenSections.push(key); }
+        saveData();
         renderManageSectionsModal();
       };
     });
@@ -1491,9 +1559,9 @@
         if(btn.disabled) return;
         const idx = +btn.dataset.idx;
         if(idx<=0) return;
-        const arr = data.sectionOrder;
+        const arr = viewProfile.sectionOrder;
         [arr[idx-1], arr[idx]] = [arr[idx], arr[idx-1]];
-        render(); saveData();
+        saveData();
         renderManageSectionsModal();
       };
     });
@@ -1501,10 +1569,10 @@
       btn.onclick = ()=>{
         if(btn.disabled) return;
         const idx = +btn.dataset.idx;
-        if(idx>=data.sectionOrder.length-1) return;
-        const arr = data.sectionOrder;
+        if(idx>=viewProfile.sectionOrder.length-1) return;
+        const arr = viewProfile.sectionOrder;
         [arr[idx+1], arr[idx]] = [arr[idx], arr[idx+1]];
-        render(); saveData();
+        saveData();
         renderManageSectionsModal();
       };
     });
@@ -1665,24 +1733,30 @@
         </div>
 
         <div class="subhead"><h3 style="font-size:.8rem;">Downloadable files</h3></div>
-        <div class="hint" style="margin-top:-2px;">Paste a link to the file (Google Drive, Dropbox, GitHub release, etc.).</div>
+        <div class="hint" style="margin-top:-2px;">Paste a link to the file, or reuse one already in your library.</div>
         ${fileRows}
         <div class="subrow">
           <div class="subrow-grid">
             <div class="field" style="margin-bottom:0;"><label>Label</label><input id="fl_label" placeholder="e.g. Resume.pdf"></div>
             <div class="field" style="margin-bottom:0;"><label>URL</label><input id="fl_url" placeholder="https://..."></div>
           </div>
-          <button class="btn ghost sm" type="button" data-action="file-add">+ Add file</button>
+          <div style="display:flex; gap:10px;">
+            <button class="btn ghost sm" type="button" data-action="file-add">+ Add file</button>
+            <button class="btn ghost sm" type="button" data-action="file-browse-library">Browse library</button>
+          </div>
         </div>
 
         <div class="subhead"><h3 style="font-size:.8rem;">Photos</h3></div>
-        <div class="hint" style="margin-top:-2px;">Upload from your device (resized and stored with your portfolio), or paste an image URL.</div>
+        <div class="hint" style="margin-top:-2px;">Upload from your device (resized and stored with your portfolio), paste an image URL, or reuse one already in your library.</div>
         ${imageRows}
         <div class="subrow">
           <div class="field" style="margin-bottom:8px;"><label>Upload from device</label><input type="file" id="im_file" accept="image/*"></div>
           <div class="field" style="margin-bottom:8px;"><label>Or paste an image URL</label><input id="im_url" placeholder="https://..."></div>
           <div class="field" style="margin-bottom:8px;"><label>Caption (optional)</label><input id="im_caption" placeholder="e.g. Home screen"></div>
-          <button class="btn ghost sm" type="button" data-action="image-add">+ Add photo</button>
+          <div style="display:flex; gap:10px;">
+            <button class="btn ghost sm" type="button" data-action="image-add">+ Add photo</button>
+            <button class="btn ghost sm" type="button" data-action="image-browse-library">Browse library</button>
+          </div>
         </div>
 
         <div class="modal-actions">
@@ -1717,6 +1791,13 @@
       p.files.push({id:uid(), label, url});
       renderProjectModal(isEdit);
     };
+    modalRoot.querySelector('[data-action="file-browse-library"]').onclick = ()=>{
+      syncProjectFields();
+      openMediaLibraryModal((url, name)=>{
+        p.files.push({id:uid(), label:name, url});
+        renderProjectModal(isEdit);
+      }, false);
+    };
     modalRoot.querySelector('[data-action="image-add"]').onclick = async ()=>{
       syncProjectFields();
       const fileInput = document.getElementById("im_file");
@@ -1734,6 +1815,13 @@
         p.images.push({id:uid(), url, caption});
         renderProjectModal(isEdit);
       }
+    };
+    modalRoot.querySelector('[data-action="image-browse-library"]').onclick = ()=>{
+      syncProjectFields();
+      openMediaLibraryModal((url, name)=>{
+        p.images.push({id:uid(), url, caption:""});
+        renderProjectModal(isEdit);
+      }, true);
     };
     if(isEdit){
       modalRoot.querySelector('[data-action="project-delete"]').onclick = ()=>{
@@ -1774,6 +1862,9 @@
     const sectionId = btn.dataset.sectionId;
 
     switch(action){
+      case "open-lightbox":
+        openLightbox(btn.dataset.url, btn.dataset.caption || "");
+        break;
       case "nav":
         state.section = btn.dataset.section; render();
         window.scrollTo({top:0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? "auto" : "smooth"});
@@ -1799,20 +1890,19 @@
       case "set-size": prefs.size = btn.dataset.value; applyPrefs(); savePrefs(); render(); break;
       case "set-project-photo-size": data.projectPhotoSize = btn.dataset.value; persistAndRender(); break;
       case "toggle-edit":
-        if(state.dataLoadFailed){ showToast("Editing is disabled until your saved content loads correctly — hit Retry above.", true); break; }
         if(state.editing){ state.editing = false; render(); } else { openAuthModal(); }
-        break;
-      case "retry-load":
-        btn.disabled = true; btn.textContent = "Retrying…";
-        loadAll().then(()=>{ render(); });
         break;
       case "change-password": openChangePasswordModal(); break;
       case "manage-sections": openManageSectionsModal(); break;
+      case "manage-profiles": openManageProfilesModal(); break;
       case "logout": logout(); break;
 
       case "edit-profile": openProfileModal(); break;
       case "edit-socials": openSocialsModal(); break;
       case "remove-photo": data.profile.photo = ""; persistAndRender(); break;
+      case "browse-profile-photo":
+        openMediaLibraryModal((url)=>{ data.profile.photo = url; persistAndRender(); }, true);
+        break;
 
       case "add-achievement": openRecordModal("achievement", null); break;
       case "edit-achievement": openRecordModal("achievement", id); break;

@@ -13,12 +13,39 @@ Edits save for every visitor immediately — no export/redeploy step needed.
   (SHA-256 + random salt) before they're stored — never saved as plain text.
 - `api/upload.js` — handles photo/file uploads (resized client-side first),
   storing them in Vercel Blob and returning a public URL.
+- `api/media.js` — lists everything you've previously uploaded, so an entry
+  can reuse an existing file instead of uploading a duplicate.
 - `lib/session.js` — a signed, HttpOnly cookie proves you're logged in. No
   session database — the cookie itself is the proof (HMAC-signed).
 - `lib/blobStore.js` — thin wrapper around Vercel Blob for the two JSON
   documents this app needs (your content, and your hashed password).
 - `data.json` — the seed content used only the very first time the site
   runs, before anything has been saved to Blob storage yet.
+
+## Profiles
+
+Profiles let you set up different named "views" of the same portfolio — for
+example a "Full Profile" and a "School Profile" that only shows a subset of
+sections — **without duplicating any content or files.** Every profile
+shares the exact same achievements, projects, skills, etc.; each profile
+just has its own list of which sections are hidden and what order they
+appear in.
+
+In edit mode, "Viewing: [Profile name]" in the edit bar opens the Profiles
+manager, where you can create new profiles, rename or delete them, and
+switch which one is currently active. Whichever profile is active is what
+every visitor sees — switching it takes effect immediately, the same way
+any other edit does. Use "Manage sections" (also in the edit bar) to
+configure the active profile's section visibility and order.
+
+## Reusing uploaded files (media library)
+
+Anywhere you can attach a photo or file — project photos, project files,
+certificates on Achievements/Education or custom-section entries, your
+profile photo — there's a "Browse library" option alongside "Upload from
+device." It lists everything you've already uploaded (with thumbnails for
+images) so you can reuse the same file across multiple entries, or across
+multiple Profiles, instead of uploading a fresh duplicate copy each time.
 
 Because it depends on Vercel Blob storage and serverless functions, **this
 app can't run by just opening `index.html` in a browser, and a plain static
@@ -29,131 +56,87 @@ actually executes those functions. See below.
 
 ## Setup — required either way
 
-Both testing locally and deploying for real need three things set up once,
-via your Vercel project (not in the code):
+Both testing locally and deploying for real need these set up once, via
+your Vercel project (not in the code):
 
 1. **Vercel Blob storage.** In your Vercel project → **Storage** tab →
    **Create Database** → **Blob**. Connecting it auto-adds a
    `BLOB_READ_WRITE_TOKEN` environment variable — you don't set this by hand.
 2. **`SESSION_SECRET`.** In your Vercel project → **Settings** →
    **Environment Variables**, add `SESSION_SECRET` set to any long random
-   string (e.g. run `openssl rand -hex 32` and paste the output). This is
-   what signs your login cookie *and* your emailed verification codes —
-   pick it once and leave it alone (changing it logs everyone out and
-   invalidates any code you've just been emailed).
-3. **`RESEND_API_KEY`.** Every login, first-time password setup, and
-   password change now requires a 6-digit code emailed to
-   `jonvincent.din@gmail.com` before it takes effect. That email is sent via
-   [Resend](https://resend.com):
-   - Create a free Resend account.
-   - Create an API key (Resend dashboard → **API Keys**).
-   - Add `RESEND_API_KEY` to your Vercel project's environment variables.
-   - The default sender is Resend's shared test address
-     (`onboarding@resend.dev`), which works out of the box but only for
-     small volumes. If you'd rather send from your own domain, verify a
-     domain in Resend and set `OTP_FROM_EMAIL` (e.g.
-     `"Portfolio <security@yourdomain.com>"`).
-   - Want the codes sent somewhere other than `jonvincent.din@gmail.com`?
-     Set an `OWNER_EMAIL` environment variable to override it.
+   string (e.g. run `openssl rand -hex 32` and paste the output). This signs
+   both your login cookie and verification-code challenges — pick it once
+   and leave it alone (changing it logs everyone out and invalidates any
+   code you're mid-way through entering).
+3. **`OWNER_EMAIL`.** The email address verification codes get sent to —
+   e.g. `jonvincent.din@gmail.com`. Anyone who can read that inbox can log
+   in, so use one only you control.
+4. **`RESEND_API_KEY`.** Email delivery goes through [Resend](https://resend.com)
+   (free tier is plenty for this). Sign up, grab an API key from
+   **Settings → API Keys**, and add it here.
+   - By default, emails send from Resend's shared `onboarding@resend.dev`
+     address, which **only delivers to the email your Resend account itself
+     is registered with.** If `OWNER_EMAIL` is a different address, verify a
+     domain in Resend and set `RESEND_FROM` (optional) to something like
+     `Portfolio <noreply@yourdomain.com>` so it can send to any address.
 
-If any of these are missing, `/api/auth`, `/api/data`, or `/api/upload` will
-fail — that's almost certainly why a password "doesn't save" or a code never
-arrives: there's nothing there yet to save it to / send it with.
-
-## Troubleshooting: "my site went back to the placeholder content"
-
-This almost always means the deployment can't reach your Blob store — **not**
-that your real data was deleted. Vercel Blob stores live independently of
-any single project and can be connected to more than one project, so a
-common trap is: you already had a store connected and full of real data on
-one project, then you pushed to GitHub and it imported as (or redeployed to)
-a project that store isn't connected to yet.
-
-The app is built to fail loudly instead of silently overwriting anything —
-if it can't load your saved content, it shows a warning banner and disables
-editing rather than quietly showing/saving placeholder content over your
-real data. If you see that banner:
-
-1. In the Vercel dashboard, open your **Storage** tab (either from the
-   project, or from your team's Storage section) and find the Blob store
-   that already has your data in it.
-2. Open that store → **Projects** tab → connect it to *this* project (the
-   one you just deployed). Don't create a brand-new store — that would be
-   empty.
-3. Also double-check **Settings → Environment Variables** on this project
-   has `SESSION_SECRET` and `RESEND_API_KEY` set (these are per-project and
-   don't carry over automatically to a new project either).
-4. Redeploy from the **Deployments** tab so the functions pick up the
-   change, then reload the site and click **Retry** on the banner (or just
-   refresh).
+If any of these is missing, `/api/auth` and `/api/data` will fail — that's
+almost certainly why a password "doesn't save": there's nothing there yet to
+save it to, or nowhere to send the verification code.
 
 ## Testing it
 
 **Fastest: deploy it, then test on the real URL.**
 1. Push this project to a GitHub repo.
 2. On [vercel.com](https://vercel.com) → **Add New → Project** → import the repo.
-3. Do the three setup steps above (Blob storage + `SESSION_SECRET` + `RESEND_API_KEY`).
+3. Do the setup steps above (Blob storage, `SESSION_SECRET`, `OWNER_EMAIL`,
+   `RESEND_API_KEY`).
 4. If you added the env vars *after* the first deploy, redeploy once from the
    **Deployments** tab so the functions pick them up.
 5. Open your `https://…vercel.app` URL, click your name, set a password,
-   then enter the code that arrives at `jonvincent.din@gmail.com` — it'll
-   actually persist now.
+   then check your email for the code — it'll actually persist now.
 
 **Or iterate locally first, with the Vercel CLI:**
 ```bash
 npm install -g vercel
 vercel link        # connects this folder to a Vercel project (creates one if needed)
-# then in the Vercel dashboard: add Blob storage + SESSION_SECRET + RESEND_API_KEY as above
+# then in the Vercel dashboard: add the env vars from Setup above
 vercel env pull .env.local
 vercel dev          # starts a local server that actually runs api/*.js
 ```
 Open the printed `http://localhost:3000` URL. Login and data now work
 locally the same way they will once deployed.
 
-## About the password
+## About the password and login security
 
-Set on first use, hashed server-side with scrypt (a slow, memory-hard
-algorithm built for password storage) plus a random salt, before it's stored
-in Blob storage — the plain text is never saved anywhere. Older sites that
-still have a password saved under the previous, weaker hashing scheme keep
-working: the first successful login transparently re-hashes it with scrypt,
-no reset required.
+- **Hashed, never stored as plain text.** SHA-256 + a random salt, checked
+  server-side on every login — not just a front-end gate.
+- **Email verification on every setup, login, and password change.** After
+  the password checks out, a 6-digit code is emailed to `OWNER_EMAIL`; you
+  need that code too before access is granted. This closes an important gap
+  in simple password-only setups: without it, whoever visits the live site
+  *first* could claim the password before you do. With it, only someone who
+  can read your inbox can ever gain access.
+- **Codes expire in 10 minutes** and are single-purpose (a login code can't
+  be reused to change your password, etc.).
+- **Lockout after 5 wrong attempts** (wrong password *or* wrong code) — the
+  account locks for 15 minutes. This applies per credentials, not per IP, so
+  it protects against brute-forcing without needing to track visitors.
+- **Every page refresh logs you out of edit mode**, on purpose — even mid-
+  session, reloading always requires the password + code again rather than
+  silently staying logged in. Trades a little convenience for a much shorter
+  window where a session could be misused (e.g. on a shared computer).
+- The auth blob (your salt+hash) is stored at a random, unguessable path in
+  Blob storage rather than a predictable one — since photo/file URLs from
+  this same storage account are visible in the page's HTML, a predictable
+  path for anything sensitive would be a real risk.
+- The session cookie is `HttpOnly` (invisible to page JavaScript) and
+  `Secure` on real deployments (HTTPS only).
 
-It's shared by anyone who knows it (there's only one editor account, by
-design), checked by the server on every save, not just a front-end gate.
-Wrong-password and wrong-code attempts are rate-limited (locked out for 15
-minutes after 5–6 bad tries) to slow down brute-forcing.
-
-**Every login, first-time setup, and password change also requires a
-6-digit code**, emailed to `jonvincent.din@gmail.com`, before it completes —
-so even someone who guesses or steals the password can't get in without
-also having access to that inbox.
-
-A signed session cookie is what keeps you logged in between requests; it's
-`HttpOnly` (not readable by page JavaScript) and only marked `Secure` on a
-real deployment, so it also works correctly over plain `http://localhost`
-during local testing. **The site also logs edit mode out on every page
-refresh** — reloading the page always clears the session, even if the
-cookie itself hadn't expired yet, so edit access never quietly survives a
-reload without re-entering the password and code.
-
-## Security notes
-
-- Passwords: scrypt + per-password random salt, never stored in plain text.
-- Two-factor: password + emailed one-time code, for setup/login/change.
-- Brute-force lockouts on wrong passwords and wrong codes.
-- Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` in production.
-- Edit sessions don't survive a page refresh — always confirmed again.
-- Basic security response headers (`vercel.json`): `X-Content-Type-Options`,
-  `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`.
-- `/api/data` and `/api/upload` both require the session cookie for writes;
-  reads are public (this is a public portfolio site).
-- If the site can't confirm your real content loaded (e.g. Blob storage
-  isn't connected to this deployment), it shows a warning banner and
-  disables editing entirely rather than silently letting you save over your
-  real data with placeholder content.
-
-
+None of this protects against someone with direct access to your Vercel
+project's environment variables or Blob storage — that's a different trust
+boundary (protect your Vercel account with a strong password and 2FA, same
+as anywhere else).
 
 ## About the contact form
 
@@ -171,15 +154,14 @@ email client on their device.
 | `style.css` | All styling, theme/text-size system |
 | `script.js` | Front-end app logic — rendering and editing |
 | `api/data.js` | Read/write portfolio content |
-| `api/auth.js` | Password setup, login, change, logout, email code verification |
+| `api/auth.js` | Password setup/login/change with email verification, lockout |
 | `api/upload.js` | Photo/file uploads to Blob storage |
+| `api/media.js` | Lists previous uploads for reuse across entries |
 | `lib/session.js` | Signed login-cookie helper |
-| `lib/blobStore.js` | Reads/writes the two JSON documents in Blob storage |
-| `lib/passwordHash.js` | Password hashing/verification (scrypt, with legacy support) |
-| `lib/otp.js` | Stateless, signed one-time email-verification codes |
-| `lib/email.js` | Sends verification-code emails via Resend |
-| `lib/rateLimit.js` | Brute-force lockouts for passwords and codes |
-| `vercel.json` | Security response headers |
+| `lib/challenge.js` | Signed, stateless verification-code tokens |
+| `lib/email.js` | Sends verification codes via Resend |
+| `lib/blobStore.js` | Reads/writes the JSON documents in Blob storage |
+| `lib/passwordHash.js` | Password hashing/verification |
 | `data.json` | Seed content, used only before anything is saved |
 
 Projects are organized into categories (e.g. "Web Apps", "Client Work"), each

@@ -45,7 +45,9 @@
     "links": []
   },
   "customSections": [],
-  "hiddenSections": [],
-  "sectionOrder": ["home", "achievements", "projects", "skills", "experience", "contact"],
+  "profiles": [
+    { "id": "default", "name": "Full Profile", "hiddenSections": [], "sectionOrder": ["home", "achievements", "projects", "skills", "experience", "contact"] }
+  ],
+  "activeProfileId": "default",
   "projectPhotoSize": "M"
 }
