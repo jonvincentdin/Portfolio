@@ -874,6 +874,7 @@
       html += `</div>`;
     });
     html += `</form>
+        ${cfg.footerLink ? `<div style="margin-top:10px;"><button type="button" class="textlink" data-action="modal-footer-link">${esc(cfg.footerLink)}</button></div>` : ''}
         <div class="modal-actions">
           ${cfg.onDelete ? '<button class="btn ghost sm" style="border-color:var(--danger); color:var(--danger);" data-action="modal-delete">Delete</button>' : ''}
           <span class="spacer"></span>
@@ -886,6 +887,7 @@
     modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
     modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
     if(cfg.onDelete){ modalRoot.querySelector('[data-action="modal-delete"]').onclick = ()=>{ cfg.onDelete(); closeModal(); }; }
+    if(cfg.footerLink){ modalRoot.querySelector('[data-action="modal-footer-link"]').onclick = ()=>{ closeModal(); cfg.onFooterLink(); }; }
     function doSubmit(){
       const values = {}; let missing = false;
       cfg.fields.forEach(f=>{
@@ -955,6 +957,8 @@
         title:"Enter edit password",
         fields:[{name:"pw", label:"Password", type:"password", required:true}],
         submitLabel:"Send verification code",
+        footerLink:"Forgot password?",
+        onFooterLink: openResetPasswordModal,
         onSubmit:async(v)=>{
           const result = await callAuthApi({action:"login-request", password:v.pw});
           if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
@@ -967,6 +971,30 @@
         }
       });
     }
+  }
+
+  function openResetPasswordModal(){
+    openFormModal({
+      title:"Reset password",
+      sub:"You don't need the old password for this — we'll email a verification code to confirm it's really you, then set this as your new password.",
+      fields:[
+        {name:"pw", label:"New password", type:"password", required:true},
+        {name:"pw2", label:"Confirm new password", type:"password", required:true}
+      ],
+      submitLabel:"Send verification code",
+      onSubmit:async(v)=>{
+        if(v.pw !== v.pw2){ showToast("Passwords don't match.", true); return; }
+        if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
+        const result = await callAuthApi({action:"reset-request", newPassword:v.pw});
+        if(!result.ok){ showToast(result.error || "Couldn't start the reset.", true); return; }
+        showToast("Verification code sent to your email");
+        openCodeModal(result.challenge, "reset-verify", ()=>{
+          authState = {hasPassword:true, authenticated:true};
+          state.editing = true; render();
+          showToast("Password reset — you're logged in.");
+        });
+      }
+    });
   }
   function openChangePasswordModal(){
     openFormModal({

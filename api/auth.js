@@ -135,6 +135,53 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    // ---- Forgot password: request a code (does NOT require the current
+    // password or an existing session — proving control of OWNER_EMAIL is
+    // the whole point, since that's the same trust boundary login already
+    // relies on). Deliberately ignores lockout too: if you're locked out
+    // because you don't remember the password, this is the way out. ----
+    if (action === "reset-request") {
+      const existing = await readAuth();
+      if (!existing || !existing.hash) {
+        res.status(400).json({ error: "No password has been set up yet." });
+        return;
+      }
+      if (existing.lastResetRequestAt && Date.now() - existing.lastResetRequestAt < SETUP_REQUEST_COOLDOWN_MS) {
+        res.status(429).json({ error: "Please wait a moment before requesting another code." });
+        return;
+      }
+      const newPassword = String(body.newPassword || "");
+      if (newPassword.length < 4) {
+        res.status(400).json({ error: "Use at least 4 characters." });
+        return;
+      }
+      const { salt, hash } = hashPassword(newPassword);
+      const { token, code } = createChallenge("reset-password", { salt, hash });
+      await sendVerificationEmail("reset-password", code);
+      await writeAuth(Object.assign({}, existing, { lastResetRequestAt: Date.now() }));
+      res.status(200).json({ challenge: token });
+      return;
+    }
+
+    // ---- Forgot password: confirm the code, then actually set the new
+    // password and log the person in. ----
+    if (action === "reset-verify") {
+      const existing = await readAuth();
+      if (!existing || !existing.hash) {
+        res.status(400).json({ error: "No password has been set up yet." });
+        return;
+      }
+      const result = verifyChallenge(body.challenge, String(body.code || ""), "reset-password");
+      if (!result.ok) {
+        res.status(400).json({ error: result.reason === "expired" ? "That code has expired — start over." : "That code isn't right." });
+        return;
+      }
+      await writeAuth({ salt: result.payload.salt, hash: result.payload.hash, failedAttempts: 0, lockUntil: 0 });
+      setSessionCookie(res);
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // ---- Change password: request a code (must already be logged in) ----
     if (action === "change-request") {
       if (!isAuthenticated(req)) {
