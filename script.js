@@ -290,6 +290,14 @@
     if(!obj.activeProfileId || !obj.profiles.some(p=>p.id===obj.activeProfileId)){
       obj.activeProfileId = obj.profiles[0].id;
     }
+    // Defensive: every profile object needs these two arrays, regardless of
+    // how it got into obj.profiles (older saved data, a partially-applied
+    // migration, manual edits, etc). Without this, any profile missing
+    // either field crashes render() on every single call.
+    obj.profiles.forEach(p=>{
+      if(!Array.isArray(p.hiddenSections)) p.hiddenSections = [];
+      if(!Array.isArray(p.sectionOrder)) p.sectionOrder = [];
+    });
     delete obj.hiddenSections;
     delete obj.sectionOrder;
   }
@@ -386,6 +394,7 @@
   function render(){
     const editing = state.editing;
     const viewProfile = getActiveProfile();
+    ensureSectionOrder(viewProfile);
     if(!editing && viewProfile.hiddenSections.includes(state.section)){ state.section = "home"; }
 
     let html = "";
@@ -1982,7 +1991,14 @@
 
   /* ============ Boot ============ */
   (async function boot(){
-    await loadAll();
-    render();
+    try{
+      await loadAll();
+      render();
+    }catch(e){
+      console.error("Boot failed:", e);
+      page.innerHTML = `<div class="empty-state" style="padding:60px 20px; text-align:center;">
+        Something went wrong loading this page. Try refreshing — if it keeps happening, check the browser console for details.
+      </div>`;
+    }
   })();
 })();
