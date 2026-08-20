@@ -929,6 +929,21 @@
     });
   }
 
+  // A "-request" call either comes back with a challenge (email verification
+  // is configured — show the code entry step) or completes immediately
+  // (verification isn't configured yet — proceed straight through, with a
+  // heads-up toast so it's obvious that step was skipped rather than silently
+  // absent).
+  function proceedAfterAuthRequest(result, verifyAction, onSuccess){
+    if(result.challenge){
+      showToast("Verification code sent to your email");
+      openCodeModal(result.challenge, verifyAction, onSuccess);
+    } else {
+      if(result.warning) showToast(result.warning);
+      onSuccess();
+    }
+  }
+
   function openAuthModal(){
     if(!authState.hasPassword){
       openFormModal({
@@ -944,8 +959,7 @@
           if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
           const result = await callAuthApi({action:"setup-request", password:v.pw});
           if(!result.ok){ showToast(result.error || "Couldn't start setup.", true); return; }
-          showToast("Verification code sent to your email");
-          openCodeModal(result.challenge, "setup-verify", ()=>{
+          proceedAfterAuthRequest(result, "setup-verify", ()=>{
             authState = {hasPassword:true, authenticated:true};
             state.editing = true; render();
             showToast("Edit mode unlocked");
@@ -962,8 +976,7 @@
         onSubmit:async(v)=>{
           const result = await callAuthApi({action:"login-request", password:v.pw});
           if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
-          showToast("Verification code sent to your email");
-          openCodeModal(result.challenge, "login-verify", ()=>{
+          proceedAfterAuthRequest(result, "login-verify", ()=>{
             authState = {hasPassword:true, authenticated:true};
             state.editing = true; render();
             showToast("Edit mode unlocked");
@@ -987,8 +1000,7 @@
         if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
         const result = await callAuthApi({action:"reset-request", newPassword:v.pw});
         if(!result.ok){ showToast(result.error || "Couldn't start the reset.", true); return; }
-        showToast("Verification code sent to your email");
-        openCodeModal(result.challenge, "reset-verify", ()=>{
+        proceedAfterAuthRequest(result, "reset-verify", ()=>{
           authState = {hasPassword:true, authenticated:true};
           state.editing = true; render();
           showToast("Password reset — you're logged in.");
@@ -1011,8 +1023,7 @@
         if(v.next.length < 4){ showToast("Use at least 4 characters.", true); return; }
         const result = await callAuthApi({action:"change-request", currentPassword:v.current, newPassword:v.next});
         if(!result.ok){ showToast(result.error || "Couldn't start the password change.", true); return; }
-        showToast("Verification code sent to your email");
-        openCodeModal(result.challenge, "change-verify", ()=>{
+        proceedAfterAuthRequest(result, "change-verify", ()=>{
           showToast("Password updated");
         });
       }

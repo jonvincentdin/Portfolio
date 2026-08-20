@@ -47,6 +47,13 @@ device." It lists everything you've already uploaded (with thumbnails for
 images) so you can reuse the same file across multiple entries, or across
 multiple Profiles, instead of uploading a fresh duplicate copy each time.
 
+The library only lists files under the `uploads/` folder in your Blob
+store — the same folder every upload already goes into (`api/upload.js`
+writes there, `api/media.js` only ever reads from there). It never lists
+`portfolio-data.json` or the `portfolio-auth-*.json` credentials file, since
+those live outside `uploads/` and aren't files you'd want to "attach" to an
+entry anyway.
+
 Because it depends on Vercel Blob storage and serverless functions, **this
 app can't run by just opening `index.html` in a browser, and a plain static
 file server (like `python -m http.server` or a VS Code Live Server) won't
@@ -80,9 +87,13 @@ your Vercel project (not in the code):
      domain in Resend and set `RESEND_FROM` (optional) to something like
      `Portfolio <noreply@yourdomain.com>` so it can send to any address.
 
-If any of these is missing, `/api/auth` and `/api/data` will fail — that's
-almost certainly why a password "doesn't save": there's nothing there yet to
-save it to, or nowhere to send the verification code.
+`BLOB_READ_WRITE_TOKEN` and `SESSION_SECRET` are required — without them,
+`/api/data` and `/api/auth` can't work at all. `OWNER_EMAIL` and
+`RESEND_API_KEY` are not required to log in: if either is missing, the app
+skips the email-code step and lets you in on the password alone (with a
+heads-up toast saying so), rather than locking you out entirely. Add both
+whenever you want that extra step back — it applies automatically the next
+time you log in, no code changes needed.
 
 ## Testing it
 
