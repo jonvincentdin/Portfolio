@@ -8,18 +8,6 @@ const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 const SETUP_REQUEST_COOLDOWN_MS = 60 * 1000; // 1 minute, so an unset site can't be email-bombed
 
-// Email verification needs RESEND_API_KEY + OWNER_EMAIL configured. If
-// either is missing, we don't want that to mean "nobody can ever log in" —
-// that's a much worse failure mode than temporarily skipping the extra
-// verification step. So every action below degrades gracefully: password
-// alone is enough until email is configured, at which point the code step
-// kicks in automatically.
-function emailConfigured() {
-  return !!(process.env.RESEND_API_KEY && process.env.OWNER_EMAIL);
-}
-const EMAIL_NOT_CONFIGURED_WARNING =
-  "Logged in without email verification — RESEND_API_KEY/OWNER_EMAIL aren't set up yet, so this step was skipped.";
-
 function isLocked(auth) {
   return !!(auth && auth.lockUntil && Date.now() < auth.lockUntil);
 }
@@ -81,12 +69,6 @@ module.exports = async function handler(req, res) {
         return;
       }
       const { salt, hash } = hashPassword(password);
-      if (!emailConfigured()) {
-        await writeAuth({ salt, hash, failedAttempts: 0, lockUntil: 0 });
-        setSessionCookie(res);
-        res.status(200).json({ ok: true, verified: true, warning: EMAIL_NOT_CONFIGURED_WARNING });
-        return;
-      }
       const { token, code } = createChallenge("setup", { salt, hash });
       await sendVerificationEmail("setup", code);
       await writeAuth(Object.assign({}, existing, { lastSetupRequestAt: Date.now() }));
@@ -127,11 +109,6 @@ module.exports = async function handler(req, res) {
         return;
       }
       await recordSuccess(auth);
-      if (!emailConfigured()) {
-        setSessionCookie(res);
-        res.status(200).json({ ok: true, verified: true, warning: EMAIL_NOT_CONFIGURED_WARNING });
-        return;
-      }
       const { token, code } = createChallenge("login", null);
       await sendVerificationEmail("login", code);
       res.status(200).json({ challenge: token });
@@ -179,12 +156,6 @@ module.exports = async function handler(req, res) {
         return;
       }
       const { salt, hash } = hashPassword(newPassword);
-      if (!emailConfigured()) {
-        await writeAuth({ salt, hash, failedAttempts: 0, lockUntil: 0 });
-        setSessionCookie(res);
-        res.status(200).json({ ok: true, verified: true, warning: EMAIL_NOT_CONFIGURED_WARNING });
-        return;
-      }
       const { token, code } = createChallenge("reset-password", { salt, hash });
       await sendVerificationEmail("reset-password", code);
       await writeAuth(Object.assign({}, existing, { lastResetRequestAt: Date.now() }));
@@ -236,11 +207,6 @@ module.exports = async function handler(req, res) {
       }
       await recordSuccess(auth);
       const { salt, hash } = hashPassword(next);
-      if (!emailConfigured()) {
-        await writeAuth({ salt, hash, failedAttempts: 0, lockUntil: 0 });
-        res.status(200).json({ ok: true, verified: true, warning: EMAIL_NOT_CONFIGURED_WARNING });
-        return;
-      }
       const { token, code } = createChallenge("change-password", { salt, hash });
       await sendVerificationEmail("change-password", code);
       res.status(200).json({ challenge: token });

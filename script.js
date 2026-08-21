@@ -76,8 +76,8 @@
     if(!box) return;
     const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const isOpen = box.classList.contains("open");
-    const img = box.querySelector("img");
-    const measure = ()=>{ box.style.maxHeight = box.scrollHeight + "px"; };
+    const imgs = Array.from(box.querySelectorAll("img"));
+    const measure = ()=>{ if(box.classList.contains("open")) box.style.maxHeight = box.scrollHeight + "px"; };
     if(isOpen){
       if(!reduceMotion){
         box.style.maxHeight = box.scrollHeight + "px";
@@ -92,11 +92,9 @@
       if(trigger) trigger.classList.add("open");
       if(reduceMotion){
         box.style.maxHeight = "none";
-      } else if(img && !img.complete){
-        measure();
-        img.addEventListener("load", measure, {once:true});
       } else {
         measure();
+        imgs.forEach(img=>{ if(!img.complete){ img.addEventListener("load", measure, {once:true}); } });
       }
     }
   }
@@ -593,37 +591,38 @@
       </div>
       ${pr.description?`<p class="entry-desc" style="margin-top:6px;">${nl2br(pr.description)}</p>`:''}
       ${(pr.tags&&pr.tags.length)?`<div style="margin-top:8px;">${pr.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`:''}
-      ${renderProjectLinksAndFiles(pr)}
-      ${renderProjectImages(pr)}
+      ${renderProjectAttachments(pr)}
     </div>`;
   }
-  function renderProjectLinksAndFiles(pr){
-    const all = [...(pr.links||[]), ...(pr.files||[]).map(f=>({...f, type:"download"}))];
-    if(all.length===0) return "";
-    const linksHtml = all.map(l=>{
+  // Links, files, and photos all collapse behind a single click-to-expand
+  // toggle (same pattern as achievements/education). Photos still get a
+  // hover zoom and open in the full-size lightbox on click — collapsing
+  // them behind the toggle doesn't give that up.
+  function renderProjectAttachments(pr){
+    const linkItems = [...(pr.links||[]), ...(pr.files||[]).map(f=>({...f, type:"download"}))];
+    const images = pr.images || [];
+    const total = linkItems.length + images.length;
+    if(total===0) return "";
+    const linksHtml = linkItems.length ? `<div class="cert-links"${images.length?' style="margin-bottom:14px;"':''}>${linkItems.map(l=>{
       const badge = l.type === "download" ? "Download ↓" : (l.type === "github" ? "GitHub ↗" : (l.type === "live" || l.type==="demo" ? "Live ↗" : "Link ↗"));
-      return `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || badge)}</a>`;
-    }).join("");
+      return `<a class="cert-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || badge)}</a>`;
+    }).join("")}</div>` : '';
+    const sizeClass = "size-" + (data.projectPhotoSize || "M").toLowerCase();
+    const imagesHtml = images.length ? `<div class="project-images ${sizeClass}">${images.map(img=>
+      `<figure><img src="${esc(img.url)}" alt="${esc(img.caption||pr.header)}" loading="lazy" data-action="open-lightbox" data-url="${esc(img.url)}" data-caption="${esc(img.caption||'')}">${img.caption?`<figcaption>${esc(img.caption)}</figcaption>`:''}</figure>`
+    ).join("")}</div>` : '';
     return `<button class="cert-trigger" data-action="toggle-cert" data-id="${pr.id}">
-      <span class="cert-trigger-label">Links & files (${all.length})</span>
+      <span class="cert-trigger-label">Links & photos (${total})</span>
       <span class="cert-chevron">⌄</span>
     </button>
     <div class="cert-box" id="certbox-${pr.id}">
       <div class="cert-box-inner">
-        <div class="cert-links">${linksHtml}</div>
+        ${linksHtml}
+        ${imagesHtml}
       </div>
     </div>`;
   }
-  function renderProjectImages(pr){
-    if(!pr.images || pr.images.length===0) return "";
-    const sizeClass = "size-" + (data.projectPhotoSize || "M").toLowerCase();
-    let html = `<div class="project-images ${sizeClass}">`;
-    pr.images.forEach(img=>{
-      html += `<figure><img src="${esc(img.url)}" alt="${esc(img.caption||pr.header)}" loading="lazy" data-action="open-lightbox" data-url="${esc(img.url)}" data-caption="${esc(img.caption||'')}">${img.caption?`<figcaption>${esc(img.caption)}</figcaption>`:''}</figure>`;
-    });
-    html += `</div>`;
-    return html;
-  }
+
 
   /* ============ SKILLS ============ */
   function renderSkills(editing){
@@ -929,21 +928,6 @@
     });
   }
 
-  // A "-request" call either comes back with a challenge (email verification
-  // is configured — show the code entry step) or completes immediately
-  // (verification isn't configured yet — proceed straight through, with a
-  // heads-up toast so it's obvious that step was skipped rather than silently
-  // absent).
-  function proceedAfterAuthRequest(result, verifyAction, onSuccess){
-    if(result.challenge){
-      showToast("Verification code sent to your email");
-      openCodeModal(result.challenge, verifyAction, onSuccess);
-    } else {
-      if(result.warning) showToast(result.warning);
-      onSuccess();
-    }
-  }
-
   function openAuthModal(){
     if(!authState.hasPassword){
       openFormModal({
@@ -959,7 +943,8 @@
           if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
           const result = await callAuthApi({action:"setup-request", password:v.pw});
           if(!result.ok){ showToast(result.error || "Couldn't start setup.", true); return; }
-          proceedAfterAuthRequest(result, "setup-verify", ()=>{
+          showToast("Verification code sent to your email");
+          openCodeModal(result.challenge, "setup-verify", ()=>{
             authState = {hasPassword:true, authenticated:true};
             state.editing = true; render();
             showToast("Edit mode unlocked");
@@ -976,7 +961,8 @@
         onSubmit:async(v)=>{
           const result = await callAuthApi({action:"login-request", password:v.pw});
           if(!result.ok){ showToast(result.error || "That password isn't right.", true); return; }
-          proceedAfterAuthRequest(result, "login-verify", ()=>{
+          showToast("Verification code sent to your email");
+          openCodeModal(result.challenge, "login-verify", ()=>{
             authState = {hasPassword:true, authenticated:true};
             state.editing = true; render();
             showToast("Edit mode unlocked");
@@ -1000,7 +986,8 @@
         if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
         const result = await callAuthApi({action:"reset-request", newPassword:v.pw});
         if(!result.ok){ showToast(result.error || "Couldn't start the reset.", true); return; }
-        proceedAfterAuthRequest(result, "reset-verify", ()=>{
+        showToast("Verification code sent to your email");
+        openCodeModal(result.challenge, "reset-verify", ()=>{
           authState = {hasPassword:true, authenticated:true};
           state.editing = true; render();
           showToast("Password reset — you're logged in.");
@@ -1023,7 +1010,8 @@
         if(v.next.length < 4){ showToast("Use at least 4 characters.", true); return; }
         const result = await callAuthApi({action:"change-request", currentPassword:v.current, newPassword:v.next});
         if(!result.ok){ showToast(result.error || "Couldn't start the password change.", true); return; }
-        proceedAfterAuthRequest(result, "change-verify", ()=>{
+        showToast("Verification code sent to your email");
+        openCodeModal(result.challenge, "change-verify", ()=>{
           showToast("Password updated");
         });
       }
