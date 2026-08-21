@@ -106,26 +106,57 @@
     setTimeout(()=>{ el.remove(); }, 2800);
   }
 
-  function openLightbox(url, caption){
-    if(!url) return;
+  function openLightbox(images, startIndex){
+    // Back-compat: allow the old openLightbox(url, caption) call shape too.
+    if(typeof images === "string"){ images = [{url: images, caption: startIndex || ""}]; startIndex = 0; }
+    images = (images || []).filter(im => im && im.url);
+    if(images.length === 0) return;
+    let index = Math.min(Math.max(startIndex || 0, 0), images.length - 1);
+    const multi = images.length > 1;
+
     const overlay = document.createElement("div");
     overlay.className = "lightbox-overlay";
     overlay.innerHTML = `
       <button class="lightbox-close" aria-label="Close" type="button">×</button>
-      <img class="lightbox-img" src="${esc(url)}" alt="${esc(caption||'Photo')}">
-      ${caption ? `<div class="lightbox-caption">${esc(caption)}</div>` : ""}
+      ${multi ? '<button class="lightbox-nav lightbox-prev" aria-label="Previous photo" type="button">‹</button>' : ''}
+      ${multi ? '<button class="lightbox-nav lightbox-next" aria-label="Next photo" type="button">›</button>' : ''}
+      ${multi ? '<div class="lightbox-counter"></div>' : ''}
+      <img class="lightbox-img" src="" alt="">
+      <div class="lightbox-caption"></div>
     `;
     document.body.appendChild(overlay);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+
+    const imgEl = overlay.querySelector(".lightbox-img");
+    const captionEl = overlay.querySelector(".lightbox-caption");
+    const counterEl = overlay.querySelector(".lightbox-counter");
+
+    function show(i){
+      index = (i + images.length) % images.length; // loop both directions
+      const current = images[index];
+      imgEl.src = current.url;
+      imgEl.alt = current.caption || "Photo";
+      captionEl.textContent = current.caption || "";
+      captionEl.style.display = current.caption ? "" : "none";
+      if(counterEl) counterEl.textContent = `${index + 1} / ${images.length}`;
+    }
+    show(index);
+
     function close(){
       overlay.remove();
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKey);
     }
-    function onKey(e){ if(e.key === "Escape") close(); }
+    function onKey(e){
+      if(e.key === "Escape") close();
+      else if(multi && e.key === "ArrowLeft") show(index - 1);
+      else if(multi && e.key === "ArrowRight") show(index + 1);
+    }
     overlay.addEventListener("click", (e)=>{
       if(e.target === overlay || e.target.closest(".lightbox-close")) close();
+      else if(e.target.closest(".lightbox-prev")) show(index - 1);
+      else if(e.target.closest(".lightbox-next")) show(index + 1);
     });
     document.addEventListener("keydown", onKey);
   }
@@ -1769,14 +1800,15 @@
         </div>
 
         <div class="subhead"><h3 style="font-size:.8rem;">Downloadable files</h3></div>
-        <div class="hint" style="margin-top:-2px;">Paste a link to the file, or reuse one already in your library.</div>
+        <div class="hint" style="margin-top:-2px;">Upload from your device, paste a link, or reuse one already in your library.</div>
         ${fileRows}
         <div class="subrow">
+          <div class="field" style="margin-bottom:8px;"><label>Upload from device</label><input type="file" id="fl_file"></div>
           <div class="subrow-grid">
-            <div class="field" style="margin-bottom:0;"><label>Label</label><input id="fl_label" placeholder="e.g. Resume.pdf"></div>
-            <div class="field" style="margin-bottom:0;"><label>URL</label><input id="fl_url" placeholder="https://..."></div>
+            <div class="field" style="margin-bottom:0;"><label>Label (optional)</label><input id="fl_label" placeholder="e.g. Resume.pdf"></div>
+            <div class="field" style="margin-bottom:0;"><label>Or paste a URL instead</label><input id="fl_url" placeholder="https://..."></div>
           </div>
-          <div style="display:flex; gap:10px;">
+          <div style="display:flex; gap:10px; margin-top:8px;">
             <button class="btn ghost sm" type="button" data-action="file-add">+ Add file</button>
             <button class="btn ghost sm" type="button" data-action="file-browse-library">Browse library</button>
           </div>
@@ -1819,13 +1851,29 @@
       p.links.push({id:uid(), type, label: label || (type==="github"?"GitHub":"Link"), url});
       renderProjectModal(isEdit);
     };
-    modalRoot.querySelector('[data-action="file-add"]').onclick = ()=>{
+    modalRoot.querySelector('[data-action="file-add"]').onclick = async ()=>{
       syncProjectFields();
+      const addBtn = modalRoot.querySelector('[data-action="file-add"]');
+      const fileInput = document.getElementById("fl_file");
+      const file = fileInput && fileInput.files && fileInput.files[0];
       const label = document.getElementById("fl_label").value.trim();
       const url = document.getElementById("fl_url").value.trim();
-      if(!label || !url){ showToast("Add a label and URL for the file.", true); return; }
-      p.files.push({id:uid(), label, url});
-      renderProjectModal(isEdit);
+      if(!file && !url){ showToast("Upload a file or paste a URL.", true); return; }
+      if(file){
+        addBtn.disabled = true; addBtn.textContent = "Uploading…";
+        try{
+          const uploadedUrl = await uploadRawFile(file);
+          p.files.push({id:uid(), label: label || file.name, url: uploadedUrl});
+          renderProjectModal(isEdit);
+        }catch(err){
+          showToast(err.message || "Couldn't upload that file — try a different one.", true);
+          addBtn.disabled = false; addBtn.textContent = "+ Add file";
+        }
+      } else {
+        if(!label){ showToast("Add a label for the link.", true); return; }
+        p.files.push({id:uid(), label, url});
+        renderProjectModal(isEdit);
+      }
     };
     modalRoot.querySelector('[data-action="file-browse-library"]').onclick = ()=>{
       syncProjectFields();
@@ -1898,9 +1946,13 @@
     const sectionId = btn.dataset.sectionId;
 
     switch(action){
-      case "open-lightbox":
-        openLightbox(btn.dataset.url, btn.dataset.caption || "");
+      case "open-lightbox": {
+        const container = btn.closest(".project-images, .cert-box-inner") || btn.parentElement;
+        const gallery = Array.from(container.querySelectorAll('[data-action="open-lightbox"]'));
+        const images = gallery.map(el => ({ url: el.dataset.url, caption: el.dataset.caption || "" }));
+        openLightbox(images, gallery.indexOf(btn));
         break;
+      }
       case "nav":
         state.section = btn.dataset.section; render();
         window.scrollTo({top:0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? "auto" : "smooth"});
