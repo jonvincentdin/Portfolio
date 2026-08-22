@@ -307,9 +307,11 @@
   // sectionOrder below. Individual entries (achievements, projects, skill
   // categories, experience items, custom-section items) can ALSO be scoped
   // to specific profiles via their own `profileIds` array — see
-  // itemVisibleInProfile(). An entry with no profileIds (or an empty one)
-  // is shared across every profile; that's the default for anything saved
-  // before this existed, so nothing already on your site disappears.
+  // itemVisibleInProfile(). Once there's more than one profile, an entry
+  // with no profileIds means "not assigned to anything yet" (invisible
+  // everywhere) rather than "shared" — that's what lets a freshly created
+  // profile start truly empty. migrateProfiles() below does a one-time
+  // catch-up stamp so that doesn't wipe out content that predates this.
   function migrateProfiles(obj){
     if(!Array.isArray(obj.profiles) || obj.profiles.length===0){
       obj.profiles = [{
@@ -333,7 +335,29 @@
     });
     delete obj.hiddenSections;
     delete obj.sectionOrder;
+
+    // ONE-TIME catch-up. If this account already has multiple profiles
+    // from before per-item scoping was in place, every item with no
+    // profileIds yet needs to be explicitly pinned to ALL profiles that
+    // currently exist — otherwise "unassigned" now means "invisible
+    // everywhere", and that content vanishes from every profile, including
+    // the original one. Runs once; items already assigned (including ones
+    // deliberately left unassigned for a brand-new empty profile, which
+    // always get an explicit array via defaultProfileIds()) are untouched.
+    if(!obj.profileScopeMigrated){
+      const allIds = obj.profiles.map(p=>p.id);
+      const stamp = (list)=>{ (list||[]).forEach(item=>{ if(!item.profileIds || item.profileIds.length===0) item.profileIds = [...allIds]; }); };
+      stamp(obj.achievements);
+      stamp(obj.education);
+      stamp(obj.skills);
+      (obj.experience||[]).forEach(sec=>stamp(sec.items));
+      (obj.projectCategories||[]).forEach(cat=>stamp(cat.projects));
+      (obj.customSections||[]).forEach(cs=>stamp(cs.items));
+      obj.profileScopeMigrated = true;
+      profileScopeMigrationJustRan = true;
+    }
   }
+  let profileScopeMigrationJustRan = false;
   function getActiveProfile(){
     migrateProfiles(data);
     return data.profiles.find(p=>p.id===data.activeProfileId) || data.profiles[0];
@@ -569,6 +593,11 @@
     const viewProfile = getActiveProfile();
     ensureSectionOrder(viewProfile);
     if(!editing && viewProfile.hiddenSections.includes(state.section)){ state.section = "home"; }
+
+    if(editing && profileScopeMigrationJustRan){
+      profileScopeMigrationJustRan = false;
+      saveData(); // now that we're authenticated, persist the catch-up fix right away
+    }
 
     let html = "";
     html += renderSiteHeader(editing);
@@ -1293,7 +1322,21 @@
     modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
 
     modalRoot.querySelectorAll('[data-action="mp-activate"]').forEach(btn=>{
-      btn.onclick = ()=>{ data.activeProfileId = btn.dataset.id; persistAndRender(); renderManageProfilesModal(); };
+      btn.onclick = async ()=>{
+        btn.disabled = true; const originalLabel = btn.textContent; btn.textContent = "Saving…";
+        const previousActiveId = data.activeProfileId;
+        const targetName = data.profiles.find(p=>p.id===btn.dataset.id).name;
+        data.activeProfileId = btn.dataset.id;
+        const saved = await saveData();
+        if(!saved){
+          data.activeProfileId = previousActiveId; // roll back — don't leave the view pointed at an unsaved switch
+          btn.disabled = false; btn.textContent = originalLabel;
+          return; // saveData() already showed the error toast
+        }
+        render();
+        renderManageProfilesModal();
+        showToast(`Saved. Now viewing "${targetName}".`);
+      };
     });
     modalRoot.querySelectorAll('[data-action="mp-rename-start"]').forEach(btn=>{
       btn.onclick = ()=>{ mpEditingId = btn.dataset.id; renderManageProfilesModal(); };
@@ -1324,9 +1367,11 @@
         renderManageProfilesModal();
       };
     });
-    modalRoot.querySelector('[data-action="mp-add"]').onclick = ()=>{
+    modalRoot.querySelector('[data-action="mp-add"]').onclick = async ()=>{
       const name = document.getElementById("mp_name").value.trim();
       if(!name){ showToast("Give the new profile a name.", true); return; }
+      const addBtn = modalRoot.querySelector('[data-action="mp-add"]');
+      addBtn.disabled = true; addBtn.textContent = "Creating…";
       // The very first time a second profile is created, every existing
       // entry needs to be explicitly pinned to the profile(s) that already
       // exist — otherwise, once there's more than one profile, "unassigned"
@@ -1351,7 +1396,15 @@
       };
       data.profiles.push(newProfile);
       data.activeProfileId = newProfile.id;
-      persistAndRender();
+      const saved = await saveData();
+      if(!saved){
+        // Roll back the in-memory change so it doesn't look created when it wasn't saved.
+        data.profiles.pop();
+        data.activeProfileId = activeP.id;
+        addBtn.disabled = false; addBtn.textContent = "+ Add profile";
+        return; // saveData() already showed the error toast
+      }
+      render();
       renderManageProfilesModal();
       showToast(`"${name}" created — it starts empty. Add new entries, or use "Browse existing" in each section to reuse ones you already have.`);
     };
