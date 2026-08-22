@@ -340,18 +340,123 @@
   }
 
   // Whether a content entry (achievement, project, skill category, etc.)
-  // should show up under the currently active profile.
+  // should show up under the currently active profile. With only one
+  // profile, scoping is moot — always visible. With multiple profiles,
+  // an item only shows up in the profiles explicitly listed in its
+  // profileIds; an empty/missing list means "not assigned to anything yet"
+  // rather than "everywhere" — that's what makes a freshly created profile
+  // start truly empty instead of inheriting all existing content.
   function itemVisibleInProfile(item){
-    if(!item.profileIds || item.profileIds.length===0) return true;
+    if(!data.profiles || data.profiles.length <= 1) return true;
+    if(!item.profileIds || item.profileIds.length===0) return false;
     return item.profileIds.includes(getActiveProfile().id);
   }
   // Default scope for a BRAND NEW entry: if more than one profile exists,
   // scope it to just the profile you're currently viewing/editing — that's
   // the whole point (adding something while on "School Profile" shouldn't
   // silently also add it everywhere else). With only one profile, scoping
-  // is meaningless, so just leave it shared.
+  // is meaningless, so just leave it unassigned.
   function defaultProfileIds(){
     return (data.profiles && data.profiles.length > 1) ? [getActiveProfile().id] : [];
+  }
+  // Adds the currently active profile to an item's allowlist, without
+  // duplicating or disturbing any other profile it's already attached to.
+  // Used both by the "Show in all profiles" style toggles and by "browse
+  // existing" pickers that attach an already-existing entry to this profile.
+  function browseExistingBtnHtml(action, id){
+    if(!data.profiles || data.profiles.length <= 1) return "";
+    return `<button class="btn sm ghost" data-action="${action}"${id?` data-id="${id}"`:''}>Browse existing</button>`;
+  }
+  function addActiveProfileTo(item){
+    const pid = getActiveProfile().id;
+    if(!item.profileIds) item.profileIds = [];
+    if(!item.profileIds.includes(pid)) item.profileIds.push(pid);
+  }
+
+  // Generic "reuse an entry that already exists elsewhere" picker.
+  // `entries` is [{id, title, subtitle}]; `onAttach(id)` does the actual
+  // work of adding the current profile to that entry's scope.
+  function openBrowseExistingModal(kindLabel, entries, onAttach){
+    let html = `<div class="modal-overlay" data-action="overlay-close">
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <h3>Add existing ${esc(kindLabel)}</h3>
+        <div class="modal-sub">Reuse something already in another profile instead of retyping it. This adds it here — it stays wherever it already was too.</div>
+        <div style="max-height:360px; overflow-y:auto; margin:14px 0; display:flex; flex-direction:column; gap:8px;">`;
+    if(entries.length===0){
+      html += `<div class="empty-state">Nothing else to reuse — everything you have is already in this profile.</div>`;
+    } else {
+      entries.forEach(it=>{
+        html += `<div class="subrow-list-item" style="align-items:center;">
+          <span><strong>${esc(it.title || "(untitled)")}</strong>${it.subtitle?` <span class="meta">${esc(it.subtitle)}</span>`:''}</span>
+          <button class="btn ghost sm" type="button" data-action="browse-existing-pick" data-id="${it.id}">Add here</button>
+        </div>`;
+      });
+    }
+    html += `</div>
+        <div class="modal-actions">
+          <span class="spacer"></span>
+          <button class="btn ghost" data-action="modal-cancel">Close</button>
+        </div>
+      </div>
+    </div>`;
+    modalRoot.innerHTML = html;
+    modalRoot.querySelector('[data-action="modal-cancel"]').onclick = closeModal;
+    modalRoot.querySelector('[data-action="overlay-close"]').addEventListener("click", (e)=>{ if(e.target===e.currentTarget) closeModal(); });
+    modalRoot.querySelectorAll('[data-action="browse-existing-pick"]').forEach(btn=>{
+      btn.onclick = ()=>{ onAttach(btn.dataset.id); closeModal(); showToast("Added to this profile."); };
+    });
+  }
+  function browseExistingRecords(kind){
+    const list = kind === "achievement" ? data.achievements : data.education;
+    const hidden = (list||[]).filter(item=>!itemVisibleInProfile(item));
+    openBrowseExistingModal(kind === "achievement" ? "achievement" : "education entry", hidden.map(it=>({id:it.id, title:it.title, subtitle:it.org})), (id)=>{
+      const item = list.find(x=>x.id===id);
+      if(!item) return;
+      addActiveProfileTo(item);
+      persistAndRender();
+    });
+  }
+  function browseExistingSkills(){
+    const hidden = (data.skills||[]).filter(item=>!itemVisibleInProfile(item));
+    openBrowseExistingModal("skill category", hidden.map(it=>({id:it.id, title:it.category, subtitle:(it.items||[]).slice(0,4).join(", ")})), (id)=>{
+      const item = data.skills.find(x=>x.id===id);
+      if(!item) return;
+      addActiveProfileTo(item);
+      persistAndRender();
+    });
+  }
+  function browseExistingExpItems(sectionId){
+    const sec = data.experience.find(s=>s.id===sectionId);
+    if(!sec) return;
+    const hidden = (sec.items||[]).filter(item=>!itemVisibleInProfile(item));
+    openBrowseExistingModal("item", hidden.map(it=>({id:it.id, title:it.title, subtitle:it.subtitle})), (id)=>{
+      const item = sec.items.find(x=>x.id===id);
+      if(!item) return;
+      addActiveProfileTo(item);
+      persistAndRender();
+    });
+  }
+  function browseExistingProjects(categoryId){
+    const cat = data.projectCategories.find(c=>c.id===categoryId);
+    if(!cat) return;
+    const hidden = (cat.projects||[]).filter(item=>!itemVisibleInProfile(item));
+    openBrowseExistingModal("project", hidden.map(it=>({id:it.id, title:it.header})), (id)=>{
+      const item = cat.projects.find(x=>x.id===id);
+      if(!item) return;
+      addActiveProfileTo(item);
+      persistAndRender();
+    });
+  }
+  function browseExistingSectionItems(sectionId){
+    const cs = data.customSections.find(c=>c.id===sectionId);
+    if(!cs) return;
+    const hidden = (cs.items||[]).filter(item=>!itemVisibleInProfile(item));
+    openBrowseExistingModal("entry", hidden.map(it=>({id:it.id, title:it.title, subtitle:it.subtitle})), (id)=>{
+      const item = cs.items.find(x=>x.id===id);
+      if(!item) return;
+      addActiveProfileTo(item);
+      persistAndRender();
+    });
   }
   // Reusable "Show in all profiles" checkbox markup for the hand-built
   // (non-generic-form) entry modals: achievement/education records,
@@ -359,7 +464,8 @@
   // one profile, since the choice wouldn't do anything.
   function profileScopeFieldHtml(item, fieldId){
     if(!data.profiles || data.profiles.length <= 1) return "";
-    const checked = !item.profileIds || item.profileIds.length===0;
+    const allIds = data.profiles.map(p=>p.id);
+    const checked = !!(item.profileIds && allIds.every(id=>item.profileIds.includes(id)));
     return `<div class="field" style="margin-top:16px;">
       <label style="display:flex; align-items:center; gap:8px; font-weight:400; cursor:pointer;">
         <input type="checkbox" id="${fieldId}" ${checked?'checked':''} style="width:auto;">
@@ -370,7 +476,7 @@
   function applyProfileScopeField(item, fieldId){
     const el = document.getElementById(fieldId);
     if(!el) return; // only one profile — field wasn't rendered, leave scope as-is
-    item.profileIds = el.checked ? [] : [getActiveProfile().id];
+    item.profileIds = el.checked ? data.profiles.map(p=>p.id) : [getActiveProfile().id];
   }
 
   function ensureSectionOrder(viewProfile){
@@ -580,9 +686,9 @@
   /* ============ ACHIEVEMENTS & EDUCATION ============ */
   function renderAchievements(editing){
     let html = `<div class="section-heading"><div><span class="section-eyebrow">Record</span><h2>Achievements & Education</h2></div></div>`;
-    html += `<div class="subhead"><h3>Achievements</h3>${editing?'<button class="btn sm accent" data-action="add-achievement">+ Add</button>':''}</div>`;
+    html += `<div class="subhead"><h3>Achievements</h3>${editing?`<div style="display:flex; gap:10px;"><button class="btn sm accent" data-action="add-achievement">+ Add</button>${browseExistingBtnHtml("browse-existing-achievement")}</div>`:''}</div>`;
     html += renderRecordList(data.achievements, "achievement", editing);
-    html += `<div class="subhead"><h3>Education</h3>${editing?'<button class="btn sm accent" data-action="add-education">+ Add</button>':''}</div>`;
+    html += `<div class="subhead"><h3>Education</h3>${editing?`<div style="display:flex; gap:10px;"><button class="btn sm accent" data-action="add-education">+ Add</button>${browseExistingBtnHtml("browse-existing-education")}</div>`:''}</div>`;
     html += renderRecordList(data.education, "education", editing);
     return html;
   }
@@ -643,6 +749,7 @@
             ${moveButtons("projectCategories", cat.id, null, catIdx, data.projectCategories.length)}
             <button class="textlink" data-action="edit-project-category" data-id="${cat.id}">Rename</button>
             <button class="textlink" data-action="add-project" data-id="${cat.id}">+ Add project</button>
+            ${data.profiles && data.profiles.length>1 ? `<button class="textlink" data-action="browse-existing-project" data-id="${cat.id}">Browse existing</button>` : ''}
             <button class="textlink danger" data-action="delete-project-category" data-id="${cat.id}">Delete category</button>
           </div>`:''}
         </div>`;
@@ -706,7 +813,7 @@
 
   /* ============ SKILLS ============ */
   function renderSkills(editing){
-    let html = `<div class="section-heading"><div><span class="section-eyebrow">Toolkit</span><h2>Skills</h2></div>${editing?'<button class="btn accent" data-action="add-skill">+ Add category</button>':''}</div>`;
+    let html = `<div class="section-heading"><div><span class="section-eyebrow">Toolkit</span><h2>Skills</h2></div>${editing?`<div style="display:flex; gap:10px;"><button class="btn accent" data-action="add-skill">+ Add category</button>${browseExistingBtnHtml("browse-existing-skill")}</div>`:''}</div>`;
     const allSkills = data.skills || [];
     const skills = allSkills.filter(itemVisibleInProfile);
     if(skills.length===0){
@@ -748,6 +855,7 @@
             ${moveButtons("experience", sec.id, null, secIdx, data.experience.length)}
             <button class="textlink" data-action="edit-exp-section" data-id="${sec.id}">Rename</button>
             <button class="textlink" data-action="add-exp-item" data-id="${sec.id}">+ Add item</button>
+            ${data.profiles && data.profiles.length>1 ? `<button class="textlink" data-action="browse-existing-exp-item" data-id="${sec.id}">Browse existing</button>` : ''}
             <button class="textlink danger" data-action="delete-exp-section" data-id="${sec.id}">Delete section</button>
           </div>`:''}
         </div>`;
@@ -812,7 +920,7 @@
     }
 
     if(hasItems || editing){
-      html += `<div class="subhead"><h3>Entries</h3>${editing?`<button class="btn sm accent" data-action="add-section-item" data-id="${cs.id}">+ Add entry</button>`:''}</div>`;
+      html += `<div class="subhead"><h3>Entries</h3>${editing?`<div style="display:flex; gap:10px;"><button class="btn sm accent" data-action="add-section-item" data-id="${cs.id}">+ Add entry</button>${browseExistingBtnHtml("browse-existing-section-item", cs.id)}</div>`:''}</div>`;
       if(hasItems){
         items.forEach((item, itemIdx)=>{
           html += `<div class="entry">
@@ -1078,8 +1186,9 @@
   function openResetPasswordModal(){
     openFormModal({
       title:"Reset password",
-      sub:"You don't need the old password for this — we'll email a verification code to confirm it's really you, then set this as your new password.",
+      sub:"Enter the email this portfolio is set up with — we'll email it a verification code to confirm it's really you, then set this as your new password.",
       fields:[
+        {name:"email", label:"Account email", type:"email", required:true, placeholder:"you@example.com"},
         {name:"pw", label:"New password", type:"password", required:true},
         {name:"pw2", label:"Confirm new password", type:"password", required:true}
       ],
@@ -1087,7 +1196,7 @@
       onSubmit:async(v)=>{
         if(v.pw !== v.pw2){ showToast("Passwords don't match.", true); return; }
         if(v.pw.length < 4){ showToast("Use at least 4 characters.", true); return; }
-        const result = await callAuthApi({action:"reset-request", newPassword:v.pw});
+        const result = await callAuthApi({action:"reset-request", email:v.email, newPassword:v.pw});
         if(!result.ok){ showToast(result.error || "Couldn't start the reset.", true); return; }
         showToast("Verification code sent to your email");
         openCodeModal(result.challenge, "reset-verify", ()=>{
@@ -1218,6 +1327,22 @@
     modalRoot.querySelector('[data-action="mp-add"]').onclick = ()=>{
       const name = document.getElementById("mp_name").value.trim();
       if(!name){ showToast("Give the new profile a name.", true); return; }
+      // The very first time a second profile is created, every existing
+      // entry needs to be explicitly pinned to the profile(s) that already
+      // exist — otherwise, once there's more than one profile, "unassigned"
+      // starts meaning "not in any profile" and everything you've already
+      // built would vanish. This is a one-time snapshot; the brand new
+      // profile's id is deliberately left out of it, so it starts empty.
+      if(data.profiles.length === 1){
+        const existingIds = data.profiles.map(p=>p.id);
+        const stamp = (list)=>{ (list||[]).forEach(item=>{ if(!item.profileIds || item.profileIds.length===0) item.profileIds = [...existingIds]; }); };
+        stamp(data.achievements);
+        stamp(data.education);
+        stamp(data.skills);
+        (data.experience||[]).forEach(sec=>stamp(sec.items));
+        (data.projectCategories||[]).forEach(cat=>stamp(cat.projects));
+        (data.customSections||[]).forEach(cs=>stamp(cs.items));
+      }
       const activeP = getActiveProfile();
       const newProfile = {
         id: uid(), name,
@@ -1228,7 +1353,7 @@
       data.activeProfileId = newProfile.id;
       persistAndRender();
       renderManageProfilesModal();
-      showToast(`"${name}" created — customize its sections with "Manage sections."`);
+      showToast(`"${name}" created — it starts empty. Add new entries, or use "Browse existing" in each section to reuse ones you already have.`);
     };
   }
 
@@ -1434,7 +1559,8 @@
       {name:"items", label:"Skills (comma-separated)", type:"textarea", value:existing?(existing.items||[]).join(", "):"", placeholder:"e.g. JavaScript, Python, SQL"}
     ];
     if(data.profiles && data.profiles.length > 1){
-      const checked = existing ? (!existing.profileIds || existing.profileIds.length===0) : false;
+      const allIds = data.profiles.map(p=>p.id);
+      const checked = !!(existing && existing.profileIds && allIds.every(pid=>existing.profileIds.includes(pid)));
       fields.push({name:"allProfiles", type:"checkbox", label:"Show in all profiles", checked});
     }
     openFormModal({
@@ -1445,9 +1571,9 @@
       onDelete: existing ? ()=>{ const idx=data.skills.findIndex(x=>x.id===id); if(idx>-1) data.skills.splice(idx,1); persistAndRender(); } : null,
       onSubmit:(v)=>{
         const items = v.items.split(",").map(s=>s.trim()).filter(Boolean);
-        const profileIds = ("allProfiles" in v) ? (v.allProfiles ? [] : [getActiveProfile().id]) : (existing ? existing.profileIds : []);
+        const profileIds = ("allProfiles" in v) ? (v.allProfiles ? data.profiles.map(p=>p.id) : [getActiveProfile().id]) : (existing ? existing.profileIds : defaultProfileIds());
         if(existing){ existing.category=v.category; existing.items=items; existing.profileIds=profileIds; }
-        else { data.skills.push({id:uid(), category:v.category, items, profileIds: profileIds.length?profileIds:defaultProfileIds()}); }
+        else { data.skills.push({id:uid(), category:v.category, items, profileIds}); }
         persistAndRender();
       }
     });
@@ -1478,7 +1604,8 @@
       {name:"description", label:"Description", type:"textarea", value:existing?existing.description:""}
     ];
     if(data.profiles && data.profiles.length > 1){
-      const checked = existing ? (!existing.profileIds || existing.profileIds.length===0) : false;
+      const allIds = data.profiles.map(p=>p.id);
+      const checked = !!(existing && existing.profileIds && allIds.every(pid=>existing.profileIds.includes(pid)));
       fields.push({name:"allProfiles", type:"checkbox", label:"Show in all profiles", checked});
     }
     openFormModal({
@@ -1487,8 +1614,9 @@
       submitLabel: existing ? "Save changes" : "Add",
       onDelete: existing ? ()=>{ const idx=sec.items.findIndex(i=>i.id===itemId); if(idx>-1) sec.items.splice(idx,1); persistAndRender(); } : null,
       onSubmit:(v)=>{
-        const profileIds = ("allProfiles" in v) ? (v.allProfiles ? [] : [getActiveProfile().id]) : null;
-        const allProfiles = v.allProfiles; delete v.allProfiles;
+        const hasToggle = "allProfiles" in v;
+        const profileIds = hasToggle ? (v.allProfiles ? data.profiles.map(p=>p.id) : [getActiveProfile().id]) : null;
+        delete v.allProfiles;
         if(existing){ Object.assign(existing, v); if(profileIds) existing.profileIds = profileIds; }
         else { sec.items.push({id:uid(), ...v, profileIds: profileIds || defaultProfileIds()}); }
         persistAndRender();
@@ -2094,10 +2222,12 @@
       case "add-achievement": openRecordModal("achievement", null); break;
       case "edit-achievement": openRecordModal("achievement", id); break;
       case "delete-achievement": deleteRecord("achievement", id); break;
+      case "browse-existing-achievement": browseExistingRecords("achievement"); break;
 
       case "add-education": openRecordModal("education", null); break;
       case "edit-education": openRecordModal("education", id); break;
       case "delete-education": deleteRecord("education", id); break;
+      case "browse-existing-education": browseExistingRecords("education"); break;
 
       case "add-project-category": openProjectCategoryModal(null); break;
       case "edit-project-category": openProjectCategoryModal(id); break;
@@ -2105,10 +2235,12 @@
       case "add-project": openProjectModal(id, null); break;
       case "edit-project": openProjectModal(sectionId, id); break;
       case "delete-project": { const cat=data.projectCategories.find(c=>c.id===sectionId); if(cat){ const idx=cat.projects.findIndex(x=>x.id===id); if(idx>-1) cat.projects.splice(idx,1);} persistAndRender(); } break;
+      case "browse-existing-project": browseExistingProjects(id); break;
 
       case "add-skill": openSkillModal(null); break;
       case "edit-skill": openSkillModal(id); break;
       case "delete-skill": { const idx=data.skills.findIndex(x=>x.id===id); if(idx>-1) data.skills.splice(idx,1); persistAndRender(); } break;
+      case "browse-existing-skill": browseExistingSkills(); break;
 
       case "add-exp-section": openExpSectionModal(null); break;
       case "edit-exp-section": openExpSectionModal(id); break;
@@ -2116,6 +2248,7 @@
       case "add-exp-item": openExpItemModal(id, null); break;
       case "edit-exp-item": openExpItemModal(sectionId, id); break;
       case "delete-exp-item": { const sec=data.experience.find(s=>s.id===sectionId); if(sec){ const idx=sec.items.findIndex(i=>i.id===id); if(idx>-1) sec.items.splice(idx,1);} persistAndRender(); } break;
+      case "browse-existing-exp-item": browseExistingExpItems(id); break;
 
       case "add-section": openAddSectionModal(); break;
       case "rename-section": openRenameSectionModal(id); break;
@@ -2126,6 +2259,7 @@
       case "add-section-item": openSectionItemModal(id, null); break;
       case "edit-section-item": openSectionItemModal(sectionId, id); break;
       case "delete-section-item": { const cs=data.customSections.find(c=>c.id===sectionId); if(cs){ const idx=cs.items.findIndex(i=>i.id===id); if(idx>-1) cs.items.splice(idx,1);} persistAndRender(); } break;
+      case "browse-existing-section-item": browseExistingSectionItems(id); break;
 
       case "edit-contact": openContactModal(); break;
       case "edit-contact-links": openContactLinksModal(); break;

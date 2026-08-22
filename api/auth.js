@@ -135,15 +135,30 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    // ---- Forgot password: request a code (does NOT require the current
-    // password or an existing session — proving control of OWNER_EMAIL is
-    // the whole point, since that's the same trust boundary login already
-    // relies on). Deliberately ignores lockout too: if you're locked out
-    // because you don't remember the password, this is the way out. ----
+    // ---- Forgot password: request a code. Requires typing the exact
+    // account email first — this is what stops a stranger who finds the
+    // edit page from spamming your inbox with codes on demand. A wrong
+    // guess counts as a failed attempt against the same lockout counter
+    // login uses, so guessing can't be hammered indefinitely either.
+    // Once the email is confirmed correct, lockout is bypassed (same as
+    // before) — that's still the intended way out if you're locked from
+    // failed login attempts but you know your own email address. ----
     if (action === "reset-request") {
       const existing = await readAuth();
       if (!existing || !existing.hash) {
         res.status(400).json({ error: "No password has been set up yet." });
+        return;
+      }
+      const ownerEmail = (process.env.OWNER_EMAIL || "").trim().toLowerCase();
+      if (!ownerEmail) {
+        res.status(500).json({ error: "OWNER_EMAIL isn't configured on the server." });
+        return;
+      }
+      const submittedEmail = String(body.email || "").trim().toLowerCase();
+      if (submittedEmail !== ownerEmail) {
+        if (isLocked(existing)) { lockedResponse(res, existing); return; }
+        await recordFailure(existing);
+        res.status(400).json({ error: "That email doesn't match our records." });
         return;
       }
       if (existing.lastResetRequestAt && Date.now() - existing.lastResetRequestAt < SETUP_REQUEST_COOLDOWN_MS) {
@@ -158,7 +173,7 @@ module.exports = async function handler(req, res) {
       const { salt, hash } = hashPassword(newPassword);
       const { token, code } = createChallenge("reset-password", { salt, hash });
       await sendVerificationEmail("reset-password", code);
-      await writeAuth(Object.assign({}, existing, { lastResetRequestAt: Date.now() }));
+      await writeAuth(Object.assign({}, existing, { lastResetRequestAt: Date.now(), failedAttempts: 0, lockUntil: 0 }));
       res.status(200).json({ challenge: token });
       return;
     }
