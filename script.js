@@ -302,10 +302,14 @@
     delete obj.projects;
   }
   // Profiles let you configure different named views of the same portfolio
-  // (e.g. "School Profile" showing only some sections) WITHOUT duplicating
-  // any actual content or files — every profile shares the same
-  // achievements/projects/etc., each profile just has its own list of
-  // which sections are hidden and what order they appear in.
+  // (e.g. "School Profile" showing only some sections/entries). Whole
+  // top-level sections can be hidden per profile via hiddenSections/
+  // sectionOrder below. Individual entries (achievements, projects, skill
+  // categories, experience items, custom-section items) can ALSO be scoped
+  // to specific profiles via their own `profileIds` array — see
+  // itemVisibleInProfile(). An entry with no profileIds (or an empty one)
+  // is shared across every profile; that's the default for anything saved
+  // before this existed, so nothing already on your site disappears.
   function migrateProfiles(obj){
     if(!Array.isArray(obj.profiles) || obj.profiles.length===0){
       obj.profiles = [{
@@ -333,6 +337,40 @@
   function getActiveProfile(){
     migrateProfiles(data);
     return data.profiles.find(p=>p.id===data.activeProfileId) || data.profiles[0];
+  }
+
+  // Whether a content entry (achievement, project, skill category, etc.)
+  // should show up under the currently active profile.
+  function itemVisibleInProfile(item){
+    if(!item.profileIds || item.profileIds.length===0) return true;
+    return item.profileIds.includes(getActiveProfile().id);
+  }
+  // Default scope for a BRAND NEW entry: if more than one profile exists,
+  // scope it to just the profile you're currently viewing/editing — that's
+  // the whole point (adding something while on "School Profile" shouldn't
+  // silently also add it everywhere else). With only one profile, scoping
+  // is meaningless, so just leave it shared.
+  function defaultProfileIds(){
+    return (data.profiles && data.profiles.length > 1) ? [getActiveProfile().id] : [];
+  }
+  // Reusable "Show in all profiles" checkbox markup for the hand-built
+  // (non-generic-form) entry modals: achievement/education records,
+  // projects, and custom-section items. Hidden entirely when there's only
+  // one profile, since the choice wouldn't do anything.
+  function profileScopeFieldHtml(item, fieldId){
+    if(!data.profiles || data.profiles.length <= 1) return "";
+    const checked = !item.profileIds || item.profileIds.length===0;
+    return `<div class="field" style="margin-top:16px;">
+      <label style="display:flex; align-items:center; gap:8px; font-weight:400; cursor:pointer;">
+        <input type="checkbox" id="${fieldId}" ${checked?'checked':''} style="width:auto;">
+        Show in all profiles${checked?'':` (currently only in "${esc(getActiveProfile().name)}")`}
+      </label>
+    </div>`;
+  }
+  function applyProfileScopeField(item, fieldId){
+    const el = document.getElementById(fieldId);
+    if(!el) return; // only one profile — field wasn't rendered, leave scope as-is
+    item.profileIds = el.checked ? [] : [getActiveProfile().id];
   }
 
   function ensureSectionOrder(viewProfile){
@@ -548,8 +586,12 @@
     html += renderRecordList(data.education, "education", editing);
     return html;
   }
-  function renderRecordList(list, kind, editing){
-    if(!list || list.length===0){
+  function renderRecordList(fullList, kind, editing){
+    const list = (fullList||[]).filter(itemVisibleInProfile);
+    if(list.length===0){
+      if(editing && fullList && fullList.length>0){
+        return `<div class="empty-state">Nothing in this profile — ${fullList.length} ${fullList.length===1?"entry exists":"entries exist"} in other profiles.</div>`;
+      }
       return `<div class="empty-state">${editing ? "Nothing here yet — add the first entry above." : "Nothing added yet."}</div>`;
     }
     let html = "";
@@ -591,6 +633,9 @@
       return html;
     }
     data.projectCategories.forEach((cat, catIdx)=>{
+      const allProjects = cat.projects || [];
+      const catProjects = allProjects.filter(itemVisibleInProfile);
+      if(!editing && catProjects.length===0 && allProjects.length>0) return; // fully hidden by profile scoping, not genuinely empty
       html += `<div class="group">
         <div class="group-head">
           <h3>${esc(cat.title)}</h3>
@@ -601,10 +646,14 @@
             <button class="textlink danger" data-action="delete-project-category" data-id="${cat.id}">Delete category</button>
           </div>`:''}
         </div>`;
-      if(!cat.projects || cat.projects.length===0){
-        html += `<div class="empty-state">${editing?"No projects yet in this category.":"Nothing here yet."}</div>`;
+      if(catProjects.length===0){
+        if(editing && allProjects.length>0){
+          html += `<div class="empty-state">Nothing in this profile — ${allProjects.length} ${allProjects.length===1?"project exists":"projects exist"} in other profiles.</div>`;
+        } else {
+          html += `<div class="empty-state">${editing?"No projects yet in this category.":"Nothing here yet."}</div>`;
+        }
       } else {
-        cat.projects.forEach((pr, prIdx)=>{ html += renderProjectCard(pr, editing, cat.id, prIdx, cat.projects.length); });
+        catProjects.forEach((pr, prIdx)=>{ html += renderProjectCard(pr, editing, cat.id, prIdx, catProjects.length); });
       }
       html += `</div>`;
     });
@@ -658,16 +707,22 @@
   /* ============ SKILLS ============ */
   function renderSkills(editing){
     let html = `<div class="section-heading"><div><span class="section-eyebrow">Toolkit</span><h2>Skills</h2></div>${editing?'<button class="btn accent" data-action="add-skill">+ Add category</button>':''}</div>`;
-    if(!data.skills || data.skills.length===0){
-      html += `<div class="empty-state">${editing?"No skill categories yet — add one above.":"Nothing added yet."}</div>`;
+    const allSkills = data.skills || [];
+    const skills = allSkills.filter(itemVisibleInProfile);
+    if(skills.length===0){
+      if(editing && allSkills.length>0){
+        html += `<div class="empty-state">Nothing in this profile — ${allSkills.length} ${allSkills.length===1?"category exists":"categories exist"} in other profiles.</div>`;
+      } else {
+        html += `<div class="empty-state">${editing?"No skill categories yet — add one above.":"Nothing added yet."}</div>`;
+      }
       return html;
     }
-    data.skills.forEach((cat, idx)=>{
+    skills.forEach((cat, idx)=>{
       html += `<div class="entry">
         <div class="entry-top">
           <div class="entry-title" style="font-size:1rem;">${esc(cat.category)}</div>
           ${editing?`<div class="entry-actions">
-            ${moveButtons("skills", cat.id, null, idx, data.skills.length)}
+            ${moveButtons("skills", cat.id, null, idx, skills.length)}
             <button class="textlink" data-action="edit-skill" data-id="${cat.id}">Edit</button>
             <button class="textlink danger" data-action="delete-skill" data-id="${cat.id}">Delete</button>
           </div>`:''}
@@ -696,10 +751,16 @@
             <button class="textlink danger" data-action="delete-exp-section" data-id="${sec.id}">Delete section</button>
           </div>`:''}
         </div>`;
-      if(!sec.items || sec.items.length===0){
-        html += `<div class="empty-state">${editing?"No items yet in this section.":"Nothing here yet."}</div>`;
+      const allItems = sec.items || [];
+      const items = allItems.filter(itemVisibleInProfile);
+      if(items.length===0){
+        if(editing && allItems.length>0){
+          html += `<div class="empty-state">Nothing in this profile — ${allItems.length} ${allItems.length===1?"item exists":"items exist"} in other profiles.</div>`;
+        } else {
+          html += `<div class="empty-state">${editing?"No items yet in this section.":"Nothing here yet."}</div>`;
+        }
       } else {
-        sec.items.forEach((item, itemIdx)=>{
+        items.forEach((item, itemIdx)=>{
           html += `<div class="entry">
             <div class="entry-top">
               <div>
@@ -707,7 +768,7 @@
                 <div class="entry-meta">${esc(item.subtitle)}${item.subtitle && item.date ? " · " : ""}${esc(item.date)}</div>
               </div>
               ${editing?`<div class="entry-actions">
-                ${moveButtons("expItems", item.id, sec.id, itemIdx, sec.items.length)}
+                ${moveButtons("expItems", item.id, sec.id, itemIdx, items.length)}
                 <button class="textlink" data-action="edit-exp-item" data-id="${item.id}" data-section-id="${sec.id}">Edit</button>
                 <button class="textlink danger" data-action="delete-exp-item" data-id="${item.id}" data-section-id="${sec.id}">Delete</button>
               </div>`:''}
@@ -734,7 +795,9 @@
     if(cs.intro) html += `<p class="intro-text">${nl2br(cs.intro)}</p>`;
 
     const hasBullets = cs.bullets && cs.bullets.length;
-    const hasItems = cs.items && cs.items.length;
+    const allItems = cs.items || [];
+    const items = allItems.filter(itemVisibleInProfile);
+    const hasItems = items.length > 0;
 
     if(hasBullets || editing){
       html += `<div class="subhead"><h3>Notes</h3>${editing?`<div style="display:flex; gap:12px;">
@@ -751,7 +814,7 @@
     if(hasItems || editing){
       html += `<div class="subhead"><h3>Entries</h3>${editing?`<button class="btn sm accent" data-action="add-section-item" data-id="${cs.id}">+ Add entry</button>`:''}</div>`;
       if(hasItems){
-        cs.items.forEach((item, itemIdx)=>{
+        items.forEach((item, itemIdx)=>{
           html += `<div class="entry">
             <div class="entry-top">
               <div>
@@ -759,7 +822,7 @@
                 <div class="entry-meta">${esc(item.subtitle)}${item.subtitle && item.date ? " · " : ""}${esc(item.date)}</div>
               </div>
               ${editing?`<div class="entry-actions">
-                ${moveButtons("sectionItems", item.id, cs.id, itemIdx, cs.items.length)}
+                ${moveButtons("sectionItems", item.id, cs.id, itemIdx, items.length)}
                 <button class="textlink" data-action="edit-section-item" data-id="${item.id}" data-section-id="${cs.id}">Edit</button>
                 <button class="textlink danger" data-action="delete-section-item" data-id="${item.id}" data-section-id="${cs.id}">Delete</button>
               </div>`:''}
@@ -768,6 +831,8 @@
             ${renderCertTrigger(item)}
           </div>`;
         });
+      } else if(editing && allItems.length>0){
+        html += `<div class="hint" style="margin:0;">Nothing in this profile — ${allItems.length} ${allItems.length===1?"entry exists":"entries exist"} in other profiles.</div>`;
       } else if(editing){
         html += `<div class="hint" style="margin:0;">No entries yet — entries are optional too.</div>`;
       }
@@ -895,6 +960,12 @@
         ${cfg.sub?`<div class="modal-sub">${esc(cfg.sub)}</div>`:''}
         <form id="dyn-form">`;
     cfg.fields.forEach(f=>{
+      if(f.type === "checkbox"){
+        html += `<div class="field"><label style="display:flex; align-items:center; gap:8px; font-weight:400; cursor:pointer;">
+          <input type="checkbox" id="f_${f.name}" name="${f.name}" ${f.checked?'checked':''} style="width:auto;"> ${esc(f.label)}
+        </label></div>`;
+        return;
+      }
       html += `<div class="field"><label for="f_${f.name}">${esc(f.label)}${f.required?' *':''}</label>`;
       if(f.type === "textarea"){
         html += `<textarea id="f_${f.name}" name="${f.name}" placeholder="${esc(f.placeholder||'')}">${esc(f.value||'')}</textarea>`;
@@ -922,6 +993,7 @@
       const values = {}; let missing = false;
       cfg.fields.forEach(f=>{
         const el = document.getElementById("f_"+f.name);
+        if(f.type === "checkbox"){ values[f.name] = el.checked; return; }
         values[f.name] = el.value.trim();
         if(f.required && !values[f.name]) missing = true;
       });
@@ -1243,7 +1315,7 @@
     tempRecordKind = kind;
     const list = kind === "achievement" ? data.achievements : data.education;
     const existing = id ? list.find(x=>x.id===id) : null;
-    tempRecord = existing ? structuredClone(existing) : {id:uid(), title:"", org:"", date:"", description:"", certLink:"", certImage:"", certFileLabel:"", certFileUrl:""};
+    tempRecord = existing ? structuredClone(existing) : {id:uid(), title:"", org:"", date:"", description:"", certLink:"", certImage:"", certFileLabel:"", certFileUrl:"", profileIds: defaultProfileIds()};
     renderRecordModal(!!existing);
   }
   function renderRecordModal(isEdit){
@@ -1275,6 +1347,8 @@
         <div class="field"><label>${r.certFileUrl?'Replace file':'Upload a file'}</label><input type="file" id="rec_cert_file_upload"></div>
         <div class="field"><label>Or paste a file URL</label><input id="rec_cert_file_url" placeholder="Link to a downloadable file"></div>
         <button class="btn ghost sm" type="button" data-action="rec-browse-file">Browse library</button>
+
+        ${profileScopeFieldHtml(r, "rec_profile_scope")}
 
         <div class="modal-actions">
           ${isEdit ? '<button class="btn ghost sm" style="border-color:var(--danger); color:var(--danger);" data-action="rec-delete">Delete</button>' : ''}
@@ -1343,6 +1417,7 @@
     r.certFileLabel = document.getElementById("rec_cert_file_label").value.trim();
     const fileUrlEl = document.getElementById("rec_cert_file_url");
     if(fileUrlEl && fileUrlEl.value.trim()) r.certFileUrl = fileUrlEl.value.trim();
+    applyProfileScopeField(r, "rec_profile_scope");
   }
   function deleteRecord(kind, id){
     const list = kind === "achievement" ? data.achievements : data.education;
@@ -1354,18 +1429,25 @@
   /* ============ Skills ============ */
   function openSkillModal(id){
     const existing = id ? data.skills.find(x=>x.id===id) : null;
+    const fields = [
+      {name:"category", label:"Category name", value:existing?existing.category:"", placeholder:"e.g. Languages", required:true},
+      {name:"items", label:"Skills (comma-separated)", type:"textarea", value:existing?(existing.items||[]).join(", "):"", placeholder:"e.g. JavaScript, Python, SQL"}
+    ];
+    if(data.profiles && data.profiles.length > 1){
+      const checked = existing ? (!existing.profileIds || existing.profileIds.length===0) : false;
+      fields.push({name:"allProfiles", type:"checkbox", label:"Show in all profiles", checked});
+    }
     openFormModal({
       title: existing ? "Edit skill category" : "Add skill category",
       sub:"List skills separated by commas.",
-      fields:[
-        {name:"category", label:"Category name", value:existing?existing.category:"", placeholder:"e.g. Languages", required:true},
-        {name:"items", label:"Skills (comma-separated)", type:"textarea", value:existing?(existing.items||[]).join(", "):"", placeholder:"e.g. JavaScript, Python, SQL"}
-      ],
+      fields,
       submitLabel: existing ? "Save changes" : "Add",
       onDelete: existing ? ()=>{ const idx=data.skills.findIndex(x=>x.id===id); if(idx>-1) data.skills.splice(idx,1); persistAndRender(); } : null,
       onSubmit:(v)=>{
         const items = v.items.split(",").map(s=>s.trim()).filter(Boolean);
-        if(existing){ existing.category=v.category; existing.items=items; } else { data.skills.push({id:uid(), category:v.category, items}); }
+        const profileIds = ("allProfiles" in v) ? (v.allProfiles ? [] : [getActiveProfile().id]) : (existing ? existing.profileIds : []);
+        if(existing){ existing.category=v.category; existing.items=items; existing.profileIds=profileIds; }
+        else { data.skills.push({id:uid(), category:v.category, items, profileIds: profileIds.length?profileIds:defaultProfileIds()}); }
         persistAndRender();
       }
     });
@@ -1389,17 +1471,28 @@
     const sec = data.experience.find(s=>s.id===sectionId);
     if(!sec) return;
     const existing = itemId ? sec.items.find(i=>i.id===itemId) : null;
+    const fields = [
+      {name:"title", label:"Title", value:existing?existing.title:"", placeholder:"e.g. Job title or role", required:true},
+      {name:"subtitle", label:"Subtitle", value:existing?existing.subtitle:"", placeholder:"e.g. Company or organization"},
+      {name:"date", label:"Date", value:existing?existing.date:"", placeholder:"e.g. 2023 – Present"},
+      {name:"description", label:"Description", type:"textarea", value:existing?existing.description:""}
+    ];
+    if(data.profiles && data.profiles.length > 1){
+      const checked = existing ? (!existing.profileIds || existing.profileIds.length===0) : false;
+      fields.push({name:"allProfiles", type:"checkbox", label:"Show in all profiles", checked});
+    }
     openFormModal({
       title: existing ? "Edit item" : `Add item to "${sec.sectionTitle}"`,
-      fields:[
-        {name:"title", label:"Title", value:existing?existing.title:"", placeholder:"e.g. Job title or role", required:true},
-        {name:"subtitle", label:"Subtitle", value:existing?existing.subtitle:"", placeholder:"e.g. Company or organization"},
-        {name:"date", label:"Date", value:existing?existing.date:"", placeholder:"e.g. 2023 – Present"},
-        {name:"description", label:"Description", type:"textarea", value:existing?existing.description:""}
-      ],
+      fields,
       submitLabel: existing ? "Save changes" : "Add",
       onDelete: existing ? ()=>{ const idx=sec.items.findIndex(i=>i.id===itemId); if(idx>-1) sec.items.splice(idx,1); persistAndRender(); } : null,
-      onSubmit:(v)=>{ if(existing){ Object.assign(existing, v); } else { sec.items.push({id:uid(), ...v}); } persistAndRender(); }
+      onSubmit:(v)=>{
+        const profileIds = ("allProfiles" in v) ? (v.allProfiles ? [] : [getActiveProfile().id]) : null;
+        const allProfiles = v.allProfiles; delete v.allProfiles;
+        if(existing){ Object.assign(existing, v); if(profileIds) existing.profileIds = profileIds; }
+        else { sec.items.push({id:uid(), ...v, profileIds: profileIds || defaultProfileIds()}); }
+        persistAndRender();
+      }
     });
   }
 
@@ -1462,7 +1555,7 @@
     if(!cs) return;
     tempSectionItemParentId = sectionId;
     const existing = itemId ? cs.items.find(i=>i.id===itemId) : null;
-    tempSectionItem = existing ? structuredClone(existing) : {id:uid(), title:"", subtitle:"", date:"", description:"", certLink:"", certImage:"", certFileLabel:"", certFileUrl:""};
+    tempSectionItem = existing ? structuredClone(existing) : {id:uid(), title:"", subtitle:"", date:"", description:"", certLink:"", certImage:"", certFileLabel:"", certFileUrl:"", profileIds: defaultProfileIds()};
     renderSectionItemModal(!!existing);
   }
   function renderSectionItemModal(isEdit){
@@ -1490,6 +1583,8 @@
         <div class="field"><label>${r.certFileUrl?'Replace file':'Upload a file'}</label><input type="file" id="si_cert_file_upload"></div>
         <div class="field"><label>Or paste a file URL</label><input id="si_cert_file_url" placeholder="Link to a downloadable file"></div>
         <button class="btn ghost sm" type="button" data-action="si-browse-file">Browse library</button>
+
+        ${profileScopeFieldHtml(r, "si_profile_scope")}
 
         <div class="modal-actions">
           ${isEdit ? '<button class="btn ghost sm" style="border-color:var(--danger); color:var(--danger);" data-action="si-delete">Delete</button>' : ''}
@@ -1563,6 +1658,7 @@
     r.certFileLabel = document.getElementById("si_cert_file_label").value.trim();
     const fileUrlEl = document.getElementById("si_cert_file_url");
     if(fileUrlEl && fileUrlEl.value.trim()) r.certFileUrl = fileUrlEl.value.trim();
+    applyProfileScopeField(r, "si_profile_scope");
   }
 
   /* ============ Manage sections ============ */
@@ -1762,7 +1858,7 @@
     tempProjectCategoryId = categoryId;
     const cat = data.projectCategories.find(c=>c.id===categoryId);
     const existing = (id && cat) ? cat.projects.find(p=>p.id===id) : null;
-    tempProject = existing ? structuredClone(existing) : {id:uid(), header:"", description:"", tags:[], links:[], files:[], images:[]};
+    tempProject = existing ? structuredClone(existing) : {id:uid(), header:"", description:"", tags:[], links:[], files:[], images:[], profileIds: defaultProfileIds()};
     renderProjectModal(!!existing);
   }
   function renderProjectModal(isEdit){
@@ -1826,6 +1922,8 @@
             <button class="btn ghost sm" type="button" data-action="image-browse-library">Browse library</button>
           </div>
         </div>
+
+        ${profileScopeFieldHtml(p, "pr_profile_scope")}
 
         <div class="modal-actions">
           ${isEdit ? '<button class="btn ghost sm" style="border-color:var(--danger); color:var(--danger);" data-action="project-delete">Delete project</button>' : ''}
@@ -1932,6 +2030,7 @@
     if(headerEl) p.header = headerEl.value.trim();
     if(descEl) p.description = descEl.value.trim();
     if(tagsEl) p.tags = tagsEl.value.split(",").map(s=>s.trim()).filter(Boolean);
+    applyProfileScopeField(p, "pr_profile_scope");
   }
 
   /* ============ Global click delegation ============ */
